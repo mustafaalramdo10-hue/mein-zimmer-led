@@ -1,0 +1,69 @@
+name: Android APK bauen
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Dateien aus dem Repository laden
+        uses: actions/checkout@v4
+
+      - name: 2. Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 3. Java 17 (für Android) einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: 4. Capacitor & Bluetooth-Plugin installieren
+        run: |
+          mkdir -p www
+          if [ -f index.html ]; then cp index.html www/index.html; fi
+          if ! grep -q "cordova.js" www/index.html; then
+            sed -i 's|</body>|<script src="cordova.js"></script></body>|' www/index.html
+          fi
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 cordova-plugin-ble-central
+          npx cap init "Mein Zimmer" "de.jgu.meinzimmer" --web-dir www
+          npx cap add android
+
+      - name: 5. Android Bluetooth-Berechtigungen automatisch eintragen
+        run: |
+          python3 - << 'EOF'
+          path = "android/app/src/main/AndroidManifest.xml"
+          with open(path, "r") as f:
+              xml = f.read()
+          perms = """
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+          """
+          xml = xml.replace("<application", perms + "\n    <application", 1)
+          with open(path, "w") as f:
+              f.write(xml)
+          EOF
+          npx cap sync android
+
+      - name: 6. Fertige APK kompilieren
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: 7. APK zum Download bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mein-Zimmer-LED-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
