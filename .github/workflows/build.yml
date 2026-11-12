@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Dateien aus dem Repository laden
+      - name: 1. Dateien laden
         uses: actions/checkout@v4
 
       - name: 2. Node.js einrichten
@@ -18,13 +18,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: 3. Java 17 (für Android) einrichten
+      - name: 3. Java 17 einrichten
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: 17
 
-      - name: 4. Capacitor & Bluetooth-Plugin installieren
+      - name: 4. Capacitor & BLE-Plugin installieren
         run: |
           mkdir -p www
           if [ -f index.html ]; then cp index.html www/index.html; fi
@@ -33,15 +33,290 @@ jobs:
           fi
           npm init -y
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 cordova-plugin-ble-central
-          npx cap init "Mein Zimmer" "de.jgu.meinzimmer" --web-dir www
+          npx cap init "LumenControl" "de.jgu.meinzimmer" --web-dir www
           npx cap add android
 
-      - name: 5. Android Bluetooth-Berechtigungen automatisch eintragen
+      - name: 5. Eigenes App-Icon, Home-Widget & Shortcuts einbauen
         run: |
           python3 - << 'EOF'
-          path = "android/app/src/main/AndroidManifest.xml"
-          with open(path, "r") as f:
+          import os, zlib, struct, math, shutil
+
+          res_dir = "android/app/src/main/res"
+          java_dir = "android/app/src/main/java/de/jgu/meinzimmer"
+          os.makedirs(java_dir, exist_ok=True)
+          os.makedirs(f"{res_dir}/drawable", exist_ok=True)
+          os.makedirs(f"{res_dir}/layout", exist_ok=True)
+          os.makedirs(f"{res_dir}/xml", exist_ok=True)
+
+          # 1. Eigenes App-Icon (Neon-LED-Ring auf dunklem Grund) als PNG erzeugen
+          def create_led_icon_png(size=192):
+              raw = bytearray()
+              cx, cy = size / 2.0, size / 2.0
+              r_outer = size * 0.36
+              r_inner = size * 0.25
+              for y in range(size):
+                  raw.append(0)
+                  for x in range(size):
+                      dx, dy = x - cx, y - cy
+                      dist = math.hypot(dx, dy)
+                      # Abgerundetes dunkles Icon-Quadrat
+                      bg_r, bg_g, bg_b = 13, 18, 28
+                      if abs(dx) > size*0.46 or abs(dy) > size*0.46:
+                          raw.extend([0, 0, 0, 0])
+                          continue
+                      # Leuchtender Farbverlauf-Ring (Türkis bis Warmgold)
+                      if r_inner <= dist <= r_outer:
+                          angle = (math.atan2(dy, dx) + math.pi) / (2 * math.pi)
+                          r = int(56 * (1 - angle) + 251 * angle)
+                          g = int(189 * (1 - angle) + 191 * angle)
+                          b = int(248 * (1 - angle) + 36 * angle)
+                          raw.extend([r, g, b, 255])
+                      elif dist < size * 0.09:
+                          # Warmer Lichtkern in der Mitte
+                          raw.extend([255, 180, 70, 255])
+                      else:
+                          raw.extend([bg_r, bg_g, bg_b, 255])
+              def chunk(tag, data):
+                  return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xffffffff)
+              ihdr = struct.pack("!IIBBBBB", size, size, 8, 6, 0, 0, 0)
+              return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
+
+          icon_bytes = create_led_icon_png(192)
+          if os.path.exists(f"{res_dir}/mipmap-anydpi-v26"):
+              shutil.rmtree(f"{res_dir}/mipmap-anydpi-v26")
+          for folder in ["mipmap-mdpi", "mipmap-hdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi"]:
+              p = f"{res_dir}/{folder}"
+              os.makedirs(p, exist_ok=True)
+              for name in ["ic_launcher.png", "ic_launcher_round.png", "ic_launcher_foreground.png"]:
+                  with open(f"{p}/{name}", "wb") as f:
+                      f.write(icon_bytes)
+
+          # 2. App-Name in strings.xml auf LumenControl setzen
+          with open(f"{res_dir}/values/strings.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">LumenControl</string>
+              <string name="title_activity_main">LumenControl</string>
+              <string name="package_name">de.jgu.meinzimmer</string>
+              <string name="custom_url_scheme">lumencontrol</string>
+          </resources>''')
+
+          # 3. Widget-Hintergrund & Button-Design
+          with open(f"{res_dir}/drawable/widget_bg.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#E6111621" />
+              <corners android:radius="18dp" />
+              <stroke android:width="1dp" android:color="#3338BDF8" />
+          </shape>''')
+
+          with open(f"{res_dir}/drawable/widget_btn_bg.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#FF1E2636" />
+              <corners android:radius="12dp" />
+              <stroke android:width="1dp" android:color="#33FFFFFF" />
+          </shape>''')
+
+          # 4. Home-Widget Layout (3 Schnellbuttons: Ein/Aus, ⭐ Modus, ⏱️ 1h Timer)
+          with open(f"{res_dir}/layout/led_widget.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="horizontal"
+              android:padding="10dp"
+              android:background="@drawable/widget_bg"
+              android:gravity="center_vertical">
+
+              <Button
+                  android:id="@+id/w_btn_toggle"
+                  android:layout_width="0dp"
+                  android:layout_height="48dp"
+                  android:layout_weight="1"
+                  android:layout_marginEnd="6dp"
+                  android:background="@drawable/widget_btn_bg"
+                  android:text="⏻ Ein/Aus"
+                  android:textColor="#FFFFFF"
+                  android:textSize="13sp"
+                  android:textAllCaps="false" />
+
+              <Button
+                  android:id="@+id/w_btn_fav"
+                  android:layout_width="0dp"
+                  android:layout_height="48dp"
+                  android:layout_weight="1"
+                  android:layout_marginEnd="6dp"
+                  android:background="@drawable/widget_btn_bg"
+                  android:text="⭐ Modus"
+                  android:textColor="#FBBF24"
+                  android:textSize="13sp"
+                  android:textAllCaps="false" />
+
+              <Button
+                  android:id="@+id/w_btn_timer"
+                  android:layout_width="0dp"
+                  android:layout_height="48dp"
+                  android:layout_weight="1"
+                  android:background="@drawable/widget_btn_bg"
+                  android:text="⏱️ 1 Std."
+                  android:textColor="#38BDF8"
+                  android:textSize="13sp"
+                  android:textAllCaps="false" />
+          </LinearLayout>''')
+
+          # 5. Widget-Metadaten & App-Shortcuts (für langes Drücken & Google Assistant)
+          with open(f"{res_dir}/xml/led_widget_info.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:minWidth="250dp"
+              android:minHeight="55dp"
+              android:updatePeriodMillis="0"
+              android:initialLayout="@layout/led_widget"
+              android:resizeMode="horizontal"
+              android:widgetCategory="home_screen" />''')
+
+          with open(f"{res_dir}/xml/shortcuts.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+              <shortcut
+                  android:shortcutId="sc_toggle"
+                  android:enabled="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:shortcutShortLabel="@string/sc_toggle_short"
+                  android:shortcutLongLabel="@string/sc_toggle_long">
+                  <intent
+                      android:action="android.intent.action.VIEW"
+                      android:targetPackage="de.jgu.meinzimmer"
+                      android:targetClass="de.jgu.meinzimmer.MainActivity"
+                      android:data="lumencontrol://action?cmd=toggle" />
+              </shortcut>
+              <shortcut
+                  android:shortcutId="sc_fav"
+                  android:enabled="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:shortcutShortLabel="@string/sc_fav_short"
+                  android:shortcutLongLabel="@string/sc_fav_long">
+                  <intent
+                      android:action="android.intent.action.VIEW"
+                      android:targetPackage="de.jgu.meinzimmer"
+                      android:targetClass="de.jgu.meinzimmer.MainActivity"
+                      android:data="lumencontrol://action?cmd=fav" />
+              </shortcut>
+              <shortcut
+                  android:shortcutId="sc_timer"
+                  android:enabled="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:shortcutShortLabel="@string/sc_timer_short"
+                  android:shortcutLongLabel="@string/sc_timer_long">
+                  <intent
+                      android:action="android.intent.action.VIEW"
+                      android:targetPackage="de.jgu.meinzimmer"
+                      android:targetClass="de.jgu.meinzimmer.MainActivity"
+                      android:data="lumencontrol://action?cmd=timer60" />
+              </shortcut>
+          </shortcuts>''')
+
+          # Shortcut-Texte in strings.xml ergänzen
+          with open(f"{res_dir}/values/strings.xml", "w") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">LumenControl</string>
+              <string name="title_activity_main">LumenControl</string>
+              <string name="package_name">de.jgu.meinzimmer</string>
+              <string name="custom_url_scheme">lumencontrol</string>
+              <string name="sc_toggle_short">Ein / Aus</string>
+              <string name="sc_toggle_long">LEDs Ein / Aus umschalten</string>
+              <string name="sc_fav_short">⭐ Favorit-Modus</string>
+              <string name="sc_fav_long">⭐ Gespeicherten Modus aktivieren</string>
+              <string name="sc_timer_short">⏱️ 1h Timer</string>
+              <string name="sc_timer_long">⏱️ 1-Stunden-Timer starten</string>
+          </resources>''')
+
+          # 6. Java-Code für MainActivity (Deep-Link Bridge) & LedWidgetProvider
+          with open(f"{java_dir}/MainActivity.java", "w") as f:
+              f.write('''package de.jgu.meinzimmer;
+
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  handleActionIntent(getIntent());
+              }
+
+              @Override
+              protected void onNewIntent(Intent intent) {
+                  super.onNewIntent(intent);
+                  setIntent(intent);
+                  handleActionIntent(intent);
+              }
+
+              private void handleActionIntent(Intent intent) {
+                  if (intent == null) return;
+                  Uri data = intent.getData();
+                  if (data != null && data.getQueryParameter("cmd") != null) {
+                      final String cmd = data.getQueryParameter("cmd");
+                      final long ts = System.currentTimeMillis();
+                      if (this.bridge != null && this.bridge.getWebView() != null) {
+                          final WebView wv = this.bridge.getWebView();
+                          for (int delay : new int[]{300, 1000, 2000}) {
+                              wv.postDelayed(() -> {
+                                  wv.evaluateJavascript("if(window.runExternalCommand) window.runExternalCommand('" + cmd + "', " + ts + ");", null);
+                              }, delay);
+                          }
+                      }
+                  }
+              }
+          }''')
+
+          with open(f"{java_dir}/LedWidgetProvider.java", "w") as f:
+              f.write('''package de.jgu.meinzimmer;
+
+          import android.app.PendingIntent;
+          import android.appwidget.AppWidgetManager;
+          import android.appwidget.AppWidgetProvider;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.widget.RemoteViews;
+
+          public class LedWidgetProvider extends AppWidgetProvider {
+              private static PendingIntent buildCmdIntent(Context context, String cmd, int reqCode) {
+                  Intent intent = new Intent(context, MainActivity.class);
+                  intent.setAction(Intent.ACTION_VIEW);
+                  intent.setData(Uri.parse("lumencontrol://action?cmd=" + cmd));
+                  intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  return PendingIntent.getActivity(
+                      context,
+                      reqCode,
+                      intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                  );
+              }
+
+              @Override
+              public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
+                  for (int appWidgetId : appWidgetIds) {
+                      RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.led_widget);
+                      views.setOnClickPendingIntent(R.id.w_btn_toggle, buildCmdIntent(context, "toggle", 101));
+                      views.setOnClickPendingIntent(R.id.w_btn_fav,    buildCmdIntent(context, "fav",    102));
+                      views.setOnClickPendingIntent(R.id.w_btn_timer,  buildCmdIntent(context, "timer60",103));
+                      appWidgetManager.updateAppWidget(appWidgetId, views);
+                  }
+              }
+          }''')
+
+          # 7. AndroidManifest.xml aktualisieren (Berechtigungen, Shortcuts, Widget-Receiver)
+          manifest_path = "android/app/src/main/AndroidManifest.xml"
+          with open(manifest_path, "r") as f:
               xml = f.read()
+
           perms = """
               <uses-permission android:name="android.permission.BLUETOOTH" />
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
@@ -50,8 +325,30 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
           """
+          activity_extras = """
+                  <intent-filter>
+                      <action android:name="android.intent.action.VIEW" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                      <category android:name="android.intent.category.BROWSABLE" />
+                      <data android:scheme="lumencontrol" android:host="action" />
+                  </intent-filter>
+                  <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+              </activity>"""
+
+          widget_receiver = """
+                  <receiver android:name=".LedWidgetProvider" android:exported="true" android:label="LumenControl">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                      </intent-filter>
+                      <meta-data android:name="android.appwidget.provider" android:resource="@xml/led_widget_info" />
+                  </receiver>
+              </application>"""
+
           xml = xml.replace("<application", perms + "\n    <application", 1)
-          with open(path, "w") as f:
+          xml = xml.replace("</activity>", activity_extras, 1)
+          xml = xml.replace("</application>", widget_receiver, 1)
+
+          with open(manifest_path, "w") as f:
               f.write(xml)
           EOF
           npx cap sync android
@@ -62,8 +359,8 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: 7. APK zum Download bereitstellen
+      - name: 7. APK bereitstellen
         uses: actions/upload-artifact@v4
         with:
-          name: Mein-Zimmer-LED-APK
+          name: LumenControl-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
