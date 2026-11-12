@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mein Zimmer – LED Control 6.0 (APK)</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --card: rgba(30, 36, 48, 0.88);
+      --card-active: rgba(42, 53, 72, 0.96);
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(180deg, #0b1320 0%, #17181c 60%, #1c1614 100%);
+      background-attachment: fixed;
+      color: var(--text);
+      margin: 0;
+      padding: env(safe-area-inset-top, 12px) 0 130px 0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      user-select: none;
+    }
+    .app {
+      width: 100%;
+      max-width: 460px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* TOP HEADER */
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 2px 6px 2px;
+    }
+    .topbar h1 { margin: 0; font-size: 1.35rem; font-weight: 600; }
+    .top-actions { display: flex; gap: 10px; align-items: center; }
+    .icon-btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      color: #fff;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .power-toggle.is-on {
+      background: #22c55e;
+      border-color: #4ade80;
+      box-shadow: 0 0 14px rgba(34, 197, 94, 0.55);
+    }
+    .power-toggle.is-off {
+      background: #2a181b;
+      border-color: #ef4444;
+      color: #fca5a5;
+    }
+
+    /* VERBINDUNG & SLIDER */
+    .conn-bar {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 9px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.84rem;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .conn-btn {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-weight: 700;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .conn-btn.connected { background: #22c55e; color: #fff; }
+
+    .slider-card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 11px 15px;
+    }
+    .slider-row { display: flex; align-items: center; gap: 12px; }
+    .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+
+    /* OBEN: DIREKTE FARBEN */
+    .quick-card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .section-label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .white-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .white-pill {
+      border: 2px solid transparent;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 0.86rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: #111827;
+    }
+    .white-pill.active { border-color: var(--accent); box-shadow: 0 0 10px rgba(56,189,248,0.4); }
+
+    .color-dots-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 7px;
+    }
+    .c-dot {
+      aspect-ratio: 1;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.22);
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      padding: 0;
+    }
+    .c-dot.active {
+      border-color: #ffffff;
+      transform: scale(1.12);
+      box-shadow: 0 0 10px rgba(255,255,255,0.5);
+    }
+    .c-dot input[type="color"] {
+      position: absolute;
+      inset: -6px;
+      width: 150%;
+      height: 150%;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    /* UNTEN: GESPEICHERTE SZENEN ("MEIN ZIMMER") */
+    .scene-list { display: flex; flex-direction: column; gap: 11px; }
+    .scene-card {
+      background: var(--card);
+      border: 2px solid transparent;
+      border-radius: 16px;
+      padding: 13px 15px;
+      cursor: pointer;
+      transition: transform 0.12s, border-color 0.15s;
+    }
+    .scene-card:active { transform: scale(0.985); }
+    .scene-card.active { border-color: #ffffff; background: var(--card-active); }
+    .scene-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .scene-title { font-size: 0.98rem; font-weight: 500; }
+    .dots-btn {
+      background: none;
+      border: none;
+      color: #d1d5db;
+      font-size: 1.3rem;
+      padding: 2px 8px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+    .gradient-bar {
+      height: 28px;
+      border-radius: 9px;
+      width: 100%;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15);
+    }
+    .add-scene-btn {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px dashed var(--accent);
+      color: var(--accent);
+      border-radius: 14px;
+      padding: 13px;
+      font-size: 0.94rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      width: 100%;
+    }
+
+    /* FESTE TIMER-LEISTE UNTEN */
+    .timer-dock {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: rgba(15, 19, 27, 0.97);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid rgba(255,255,255,0.12);
+      padding: 9px 14px calc(13px + env(safe-area-inset-bottom, 0px)) 14px;
+      display: flex;
+      justify-content: center;
+      z-index: 50;
+    }
+    .timer-inner { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 7px; }
+    .timer-status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+    }
+    .sunset-toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.78rem;
+      color: #fbbf24;
+      cursor: pointer;
+    }
+    .timer-pills { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+    .t-pill {
+      background: #1f2634;
+      border: 1px solid #323d52;
+      color: #e5e7eb;
+      border-radius: 9px;
+      padding: 7px 11px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .t-pill.active { background: #f59e0b; border-color: #fbbf24; color: #000; }
+    .t-pill.cancel { background: rgba(239, 68, 68, 0.18); border-color: #ef4444; color: #fca5a5; }
+
+    /* EDITOR & EINSTELLUNGEN */
+    .hidden { display: none !important; }
+    .preview-box { background: #14171f; border-radius: 14px; padding: 14px; margin: 6px 0; border: 1px solid rgba(255,255,255,0.08); }
+    .editor-top {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 6px 0 12px 0; border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .text-btn { background: none; border: none; color: #fff; font-size: 0.98rem; cursor: pointer; padding: 6px 8px; }
+    .editor-tools-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .laser-bar {
+      background: rgba(250, 204, 21, 0.12);
+      border: 1px solid rgba(250, 204, 21, 0.35);
+      border-radius: 10px;
+      padding: 8px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.84rem;
+      color: #fef08a;
+      margin-bottom: 10px;
+    }
+    .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .mode-btn { background: #222733; border: 1px solid #333a4a; color: #aaa; padding: 8px; border-radius: 8px; font-size: 0.8rem; cursor: pointer; }
+    .mode-btn.active { background: rgba(56, 189, 248, 0.2); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .mirror-btn { background: #222733; border: 1px solid #3c4659; color: #e5e7eb; padding: 8px 11px; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+
+    .markers-track { position: relative; height: 14px; margin-top: 6px; }
+    .marker-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; top: 3px; transform: translateX(-50%); border: 1px solid #fff; }
+    .stop-row { background: #161920; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid #262b36; }
+    .stop-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .stop-left { display: flex; align-items: center; gap: 12px; }
+    .stop-num { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #6b7280; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }
+    .color-swatch-wrap { position: relative; width: 60px; height: 32px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.3); }
+    .color-swatch-wrap input[type="color"] { position: absolute; top: -6px; left: -6px; width: 76px; height: 46px; border: none; cursor: pointer; background: none; }
+    .off-chip { background: #272c38; color: #d1d5db; border: 1px solid #4b5563; border-radius: 6px; padding: 5px 8px; font-size: 0.75rem; cursor: pointer; }
+    .slider-line { display: flex; align-items: center; gap: 10px; }
+    .step-btn { width: 30px; height: 30px; border-radius: 50%; background: #fff; color: #000; border: none; font-weight: 800; font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .slider-line input[type="range"] { flex: 1; accent-color: #3b82f6; }
+    .name-input { width: 100%; background: #161920; border: 1px solid #2e3543; color: #fff; padding: 10px 12px; border-radius: 10px; font-size: 0.95rem; margin: 10px 0; }
+    textarea.backup-box {
+      width: 100%;
+      height: 64px;
+      background: #0d1016;
+      border: 1px solid #2f3746;
+      color: #9ca3af;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 0.75rem;
+      font-family: monospace;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= HAUPTANSICHT ================= -->
+  <div id="mainView">
+    <div class="topbar">
+      <h1>Mein Zimmer</h1>
+      <div class="top-actions">
+        <button class="icon-btn" title="Kalibrierung & Backup" onclick="toggleSettingsPanel()">⚙️</button>
+        <button id="powerToggleBtn" class="icon-btn power-toggle is-on" title="Ein / Aus" onclick="togglePower()">⏻</button>
+      </div>
+    </div>
+
+    <!-- VERBINDUNG -->
+    <div class="conn-bar">
+      <span id="statusText">Verbinde automatisch...</span>
+      <button id="connBtn" class="conn-btn" onclick="connectManualOrNative()">🔗 Verbinden</button>
+    </div>
+
+    <!-- EINSTELLUNGEN: WEISS-KALIBRIERUNG, WARMWEISS-TON & BACKUP -->
+    <div id="settingsPanel" class="preview-box hidden">
+      <div style="font-weight:600; margin-bottom:8px; font-size:0.92rem;">✨ Weiß- & Warmton-Kalibrierung</div>
+      <div style="font-size:0.84rem; margin-bottom:6px;">
+        Grün am Ende dämpfen (gegen Grünstich): <strong id="gDampVal">58</strong>%
+        <input type="range" id="gDampSlider" min="0" max="90" value="58" style="width:100%" oninput="updateCalib()">
+      </div>
+      <div style="font-size:0.84rem; margin-bottom:10px;">
+        Rot am Ende dämpfen: <strong id="rDampVal">48</strong>%
+        <input type="range" id="rDampSlider" min="0" max="90" value="48" style="width:100%" oninput="updateCalib()">
+      </div>
+      <div style="font-size:0.84rem; margin-bottom:8px; border-top:1px solid #2b3240; padding-top:8px;">
+        🕯️ Warmweiß-Feinabstimmung (kleiner = noch wärmer): <strong id="warmGreenVal">75</strong>
+        <input type="range" id="warmGreenSlider" min="35" max="130" value="75" style="width:100%" oninput="updateWarmTone()">
+      </div>
+
+      <div style="border-top:1px solid #2b3240; padding-top:10px; margin-top:8px;">
+        <div style="font-weight:600; margin-bottom:6px; font-size:0.9rem;">💾 Backup (Export / Import)</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <button class="mirror-btn" onclick="exportBackup()">📋 Backup kopieren</button>
+          <button class="mirror-btn" onclick="importBackup()">📥 Backup laden</button>
+        </div>
+        <textarea id="backupArea" class="backup-box" placeholder="Backup-Code hier kopieren oder einfügen..."></textarea>
+      </div>
+    </div>
+
+    <!-- GLOBALE HELLIGKEIT -->
+    <div class="slider-card">
+      <div class="slider-row">
+        <span>☀️</span>
+        <input type="range" id="globalBright" min="5" max="100" value="85" oninput="onBrightnessChange(this.value)">
+        <span style="min-width:38px; text-align:right; font-size:0.88rem;"><strong id="brightVal">85</strong>%</span>
+      </div>
+    </div>
+
+    <!-- OBEN: DIREKTE STANDARD-FARBEN -->
+    <div class="quick-card">
+      <div class="section-label"><span>Direkte Farben</span></div>
+
+      <!-- 2 ALLTAGSLICHT-BUTTONS (EXTRA WARMES ~2000K WARMWEISS + TAGESLICHT) -->
+      <div class="white-row">
+        <button id="solid_warm" class="white-pill" style="background:linear-gradient(90deg,#ff9e44,#ff6b1a);" onclick="selectWarmWhite()">🕯️ Warmweiß</button>
+        <button id="solid_day"  class="white-pill" style="background:linear-gradient(90deg,#f8fafc,#e0f2fe);" onclick="selectSolidColor('#ffffff', 'solid_day')">💡 Tageslicht</button>
+      </div>
+
+      <!-- 7 DIREKTE FARBPUNKTE + FREIER FARBWÄHLER -->
+      <div class="color-dots-grid">
+        <button id="solid_red"    class="c-dot" style="background:#ff0000" title="Rot"    onclick="selectSolidColor('#ff0000', 'solid_red')"></button>
+        <button id="solid_orange" class="c-dot" style="background:#ff5500" title="Orange" onclick="selectSolidColor('#ff5500', 'solid_orange')"></button>
+        <button id="solid_yellow" class="c-dot" style="background:#ffbb00" title="Gelb"   onclick="selectSolidColor('#ffbb00', 'solid_yellow')"></button>
+        <button id="solid_green"  class="c-dot" style="background:#00ff00" title="Grün"   onclick="selectSolidColor('#00ff00', 'solid_green')"></button>
+        <button id="solid_cyan"   class="c-dot" style="background:#00ffff" title="Türkis" onclick="selectSolidColor('#00ffff', 'solid_cyan')"></button>
+        <button id="solid_blue"   class="c-dot" style="background:#0033ff" title="Blau"   onclick="selectSolidColor('#0033ff', 'solid_blue')"></button>
+        <button id="solid_purple" class="c-dot" style="background:#8800ff" title="Lila"   onclick="selectSolidColor('#8800ff', 'solid_purple')"></button>
+        <div    id="solid_custom" class="c-dot" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);" title="Eigene Farbe">
+          <input type="color" value="#ff0088" oninput="selectSolidColor(this.value, 'solid_custom')">
+        </div>
+      </div>
+    </div>
+
+    <!-- UNTEN: GESPEICHERTE SZENEN & ZONEN -->
+    <div class="section-label" style="margin:4px 2px 0 2px;"><span>Gespeicherte Einstellungen</span></div>
+    <div id="sceneList" class="scene-list"></div>
+    <button class="add-scene-btn" onclick="createNewScene()">+ Neue Einstellung erstellen</button>
+  </div>
+
+  <!-- ================= EDITOR-ANSICHT ("ERSTELLEN") ================= -->
+  <div id="editorView" class="hidden">
+    <div class="editor-top">
+      <button class="text-btn" onclick="closeEditor()">← Zurück</button>
+      <strong style="font-size:1.1rem;">Erstellen</strong>
+      <button class="text-btn" style="color:var(--accent); font-weight:700;" onclick="saveEditorScene()">Speichern</button>
+    </div>
+
+    <input type="text" id="editSceneName" class="name-input" placeholder="Name der Einstellung">
+
+    <!-- WAND-LASERPOINTER -->
+    <div class="laser-bar">
+      <span>🔦 Wand-Laserpointer (zeigt nur 1 LED beim Schieben)</span>
+      <input type="checkbox" id="laserPointerToggle" onchange="onLaserToggle()">
+    </div>
+
+    <div class="preview-box">
+      <div class="editor-tools-row">
+        <div class="mode-switch">
+          <button id="modeGradBtn" class="mode-btn active" onclick="setEditMode('gradient')">🌈 Verlauf</button>
+          <button id="modeStepBtn" class="mode-btn" onclick="setEditMode('step')">🧱 Harte Zonen</button>
+        </div>
+        <button class="mirror-btn" title="Links und rechts tauschen" onclick="mirrorEditorScene()">⇄ Spiegeln</button>
+      </div>
+      <div id="editorPreviewBar" class="gradient-bar"></div>
+      <div id="editorMarkers" class="markers-track"></div>
+    </div>
+
+    <div id="stopsContainer"></div>
+
+    <button class="add-scene-btn" onclick="addColorStop()">Neue Farbe hinzufügen</button>
+    <button class="text-btn" style="color:#ef4444; width:100%; margin-top:14px;" onclick="deleteCurrentScene()">🗑️ Einstellung löschen</button>
+  </div>
+
+</div>
+
+<!-- ================= FESTE TIMER-LEISTE UNTEN ================= -->
+<div class="timer-dock">
+  <div class="timer-inner">
+    <div class="timer-status-row">
+      <span id="timerLabel" style="color:var(--muted);">⏱️ Timer: Aus</span>
+      <span id="timerCountdown" style="font-weight:700; color:#fbbf24;"></span>
+      <label class="sunset-toggle" title="In den letzten 10 Min. warm herunterdimmen">
+        <input type="checkbox" id="sunsetFadeCheck" checked> 🌅 Sanft ausfaden
+      </label>
+    </div>
+    <div class="timer-pills">
+      <button class="t-pill" id="tp_30"  onclick="startTimer(30)">30 Min</button>
+      <button class="t-pill" id="tp_60"  onclick="startTimer(60)">1 Std</button>
+      <button class="t-pill" id="tp_120" onclick="startTimer(120)">2 Std</button>
+      <button class="t-pill" id="tp_180" onclick="startTimer(180)">3 Std</button>
+      <button class="t-pill" id="tp_240" onclick="startTimer(240)">4 Std</button>
+      <button class="t-pill" onclick="customTimerPrompt()">Eigene</button>
+      <button class="t-pill cancel hidden" id="tp_cancel" onclick="cancelTimer()">✕ Stopp</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Hardware-Konstanten deines Zengge-Controllers
+  const TARGET_MAC   = "08:65:F0:44:13:59";
+  const SERVICE_UUID = 0xffff;
+  const WRITE_UUID   = 0xff01;
+  const TOTAL_LEDS   = 180;
+
+  let bleDevice = null;
+  let writeChar = null;
+  let isNativeConnected = false;
+  let packetCounter = 1;
+  let isPowerOn = true;
+  let globalBrightness = 85;
+
+  let activeModeType = 'scene';
+  let activeSceneId = 1;
+  let activeSolidHex = '#ffffff';
+
+  let editingScene = null;
+  let lastTouchedStopIdx = 0;
+  let sendDebounce = null;
+
+  // Kalibrierwerte gegen Grünstich + noch wärmerer Warmweiß-Standard (G=75, B=4 -> #ff4b04)
+  let greenDampEnd = 58;
+  let redDampEnd   = 48;
+  let warmGreenByte = 75;
+
+  // Timer & Sonnenuntergang
+  let timerStartTimestamp = null;
+  let timerEndTimestamp = null;
+  let timerInterval = null;
+  let lastSunsetStep = -1;
+
+  const defaultScenes = [
+    {
+      id: 1,
+      name: "Grün - Weiß - Türkis",
+      mode: "gradient",
+      stops: [
+        { pos: 15,  color: "#00ff00" },
+        { pos: 90,  color: "#ffffff" },
+        { pos: 155, color: "#00ffff" }
+      ]
+    },
+    {
+      id: 2,
+      name: "Nur hinterer Zimmer-Teil",
+      mode: "step",
+      stops: [
+        { pos: 0,   color: "#000000" },
+        { pos: 115, color: "#ffffff" }
+      ]
+    },
+    {
+      id: 3,
+      name: "Nur vorderer Zimmer-Teil",
+      mode: "step",
+      stops: [
+        { pos: 0,   color: "#ff9933" },
+        { pos: 75,  color: "#000000" }
+      ]
+    },
+    {
+      id: 4,
+      name: "Ozean Verlauf",
+      mode: "gradient",
+      stops: [
+        { pos: 10,  color: "#0088ff" },
+        { pos: 95,  color: "#00ffcc" },
+        { pos: 170, color: "#aa00ff" }
+      ]
+    }
+  ];
+
+  let scenes = [];
+
+  window.addEventListener('DOMContentLoaded', () => {
+    loadStorage();
+    renderSceneList();
+    // In der Android-APK feuert 'deviceready', im Browser starten wir direkt
+    document.addEventListener('deviceready', () => {
+      connectNativeAPK();
+    }, false);
+    setTimeout(() => {
+      if (!window.ble) trySilentWebReconnect();
+    }, 400);
+  });
+
+  // Berechnet den tiefwarmen Farbton (~2000K bei G=75 -> R=255, G=75, B=4)
+  function getWarmWhiteHex() {
+    const g = Math.max(35, Math.min(140, warmGreenByte));
+    const b = Math.max(0, Math.round((g - 45) * 0.13));
+    return '#' + [255, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  function loadStorage() {
+    const saved = localStorage.getItem('zengge_scenes_v5');
+    scenes = saved ? JSON.parse(saved) : defaultScenes;
+    const gD = localStorage.getItem('zengge_gDamp');
+    const rD = localStorage.getItem('zengge_rDamp');
+    const wG = localStorage.getItem('zengge_warmGreen_v2'); // Neuer Key, damit 75 sofort aktiv ist
+    if (gD !== null) greenDampEnd = parseInt(gD, 10);
+    if (rD !== null) redDampEnd = parseInt(rD, 10);
+    if (wG !== null) warmGreenByte = parseInt(wG, 10);
+    loadStorageUI();
+  }
+
+  function saveStorage() {
+    localStorage.setItem('zengge_scenes_v5', JSON.stringify(scenes));
+    localStorage.setItem('zengge_gDamp', greenDampEnd);
+    localStorage.setItem('zengge_rDamp', redDampEnd);
+    localStorage.setItem('zengge_warmGreen_v2', warmGreenByte);
+  }
+
+  function loadStorageUI() {
+    document.getElementById('gDampSlider').value = greenDampEnd;
+    document.getElementById('gDampVal').textContent = greenDampEnd;
+    document.getElementById('rDampSlider').value = redDampEnd;
+    document.getElementById('rDampVal').textContent = redDampEnd;
+    document.getElementById('warmGreenSlider').value = warmGreenByte;
+    document.getElementById('warmGreenVal').textContent = warmGreenByte;
+  }
+
+  // ================= BACKUP EXPORT / IMPORT =================
+  function exportBackup() {
+    const payload = JSON.stringify({ scenes, greenDampEnd, redDampEnd, warmGreenByte });
+    const area = document.getElementById('backupArea');
+    area.value = payload;
+    area.select();
+    if (navigator.clipboard) navigator.clipboard.writeText(payload).catch(() => {});
+    document.getElementById('statusText').textContent = "📋 Backup-Code kopiert!";
+  }
+
+  function importBackup() {
+    const raw = document.getElementById('backupArea').value.trim();
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.scenes) && data.scenes.length > 0) {
+        scenes = data.scenes;
+        if (typeof data.greenDampEnd === 'number') greenDampEnd = data.greenDampEnd;
+        if (typeof data.redDampEnd === 'number') redDampEnd = data.redDampEnd;
+        if (typeof data.warmGreenByte === 'number') warmGreenByte = data.warmGreenByte;
+        loadStorageUI();
+        saveStorage();
+        renderSceneList();
+        document.getElementById('statusText').textContent = "✅ Backup erfolgreich geladen!";
+      }
+    } catch (e) {
+      document.getElementById('statusText').textContent = "❌ Ungültiger Backup-Code";
+    }
+  }
+
+  // ================= EIN / AUS TOGGLE =================
+  function setPowerVisualState(on) {
+    isPowerOn = on;
+    const btn = document.getElementById('powerToggleBtn');
+    btn.classList.toggle('is-on', on);
+    btn.classList.toggle('is-off', !on);
+  }
+
+  function togglePower() {
+    const nextState = !isPowerOn;
+    setPowerVisualState(nextState);
+    sendPower(nextState);
+  }
+
+  // ================= DIREKTE FARBEN =================
+  function clearSelectionHighlights() {
+    document.querySelectorAll('.white-pill, .c-dot, .scene-card').forEach(el => el.classList.remove('active'));
+  }
+
+  function selectWarmWhite() {
+    selectSolidColor(getWarmWhiteHex(), 'solid_warm');
+  }
+
+  function selectSolidColor(hex, btnId) {
+    activeModeType = 'solid';
+    activeSolidHex = hex;
+    clearSelectionHighlights();
+    if (btnId) {
+      const el = document.getElementById(btnId);
+      if (el) el.classList.add('active');
+    }
+    setPowerVisualState(true);
+    sendCurrentActiveOutput(0);
+  }
+
+  function updateWarmTone() {
+    warmGreenByte = parseInt(document.getElementById('warmGreenSlider').value, 10);
+    document.getElementById('warmGreenVal').textContent = warmGreenByte;
+    saveStorage();
+    selectWarmWhite();
+  }
+
+  // ================= AUSSCHALT-TIMER + SONNENUNTERGANG =================
+  function startTimer(minutes) {
+    cancelTimer(false);
+    const now = Date.now();
+    timerStartTimestamp = now;
+    timerEndTimestamp = now + minutes * 60 * 1000;
+    lastSunsetStep = -1;
+
+    document.querySelectorAll('.t-pill').forEach(p => p.classList.remove('active'));
+    const pill = document.getElementById('tp_' + minutes);
+    if (pill) pill.classList.add('active');
+    document.getElementById('tp_cancel').classList.remove('hidden');
+
+    updateTimerDisplay();
+    timerInterval = setInterval(updateTimerDisplay, 1000);
+  }
+
+  function customTimerPrompt() {
+    const input = prompt("In wie vielen Minuten sollen die LEDs ausgehen?", "45");
+    if (!input) return;
+    const mins = parseFloat(input.replace(',', '.'));
+    if (mins > 0 && mins <= 1440) startTimer(mins);
+  }
+
+  function cancelTimer(resetText = true) {
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+    timerStartTimestamp = null;
+    timerEndTimestamp = null;
+    lastSunsetStep = -1;
+    document.querySelectorAll('.t-pill').forEach(p => p.classList.remove('active'));
+    document.getElementById('tp_cancel').classList.add('hidden');
+    if (resetText) {
+      document.getElementById('timerLabel').textContent = "⏱️ Timer: Aus";
+      document.getElementById('timerCountdown').textContent = "";
+    }
+  }
+
+  function updateTimerDisplay() {
+    if (!timerEndTimestamp) return;
+    const now = Date.now();
+    const diffMs = timerEndTimestamp - now;
+
+    if (diffMs <= 0) {
+      setPowerVisualState(false);
+      sendPower(false);
+      cancelTimer(false);
+      document.getElementById('timerLabel').textContent = "✅ Timer abgelaufen (LEDs aus)";
+      document.getElementById('timerCountdown').textContent = "";
+      return;
+    }
+
+    const totalSec = Math.ceil(diffMs / 1000);
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    document.getElementById('timerCountdown').textContent =
+      String(hrs).padStart(2, '0') + ":" + String(mins).padStart(2, '0') + ":" + String(secs).padStart(2, '0');
+
+    const sunsetEnabled = document.getElementById('sunsetFadeCheck').checked;
+    const totalDuration = timerEndTimestamp - timerStartTimestamp;
+    const fadeWindow = Math.min(10 * 60 * 1000, totalDuration * 0.5);
+
+    if (sunsetEnabled && diffMs <= fadeWindow) {
+      const sunsetProgress = 1 - (diffMs / fadeWindow);
+      document.getElementById('timerLabel').textContent = "🌅 Sonnenuntergang läuft:";
+      const step = Math.floor(sunsetProgress * 40);
+      if (step !== lastSunsetStep) {
+        lastSunsetStep = step;
+        sendCurrentActiveOutput(sunsetProgress);
+      }
+    } else {
+      document.getElementById('timerLabel').textContent = "⏳ Schaltet aus in:";
+    }
+  }
+
+  // ================= BLUETOOTH: NATIVE APK (DIREKT PER MAC) & WEB FALLBACK =================
+  function connectManualOrNative() {
+    if (window.ble) {
+      connectNativeAPK();
+    } else {
+      connectWebBLE();
+    }
+  }
+
+  // NATIVE ANDROID APK: Verbindet sich SOFORT ohne Auswahlfenster mit 08:65:F0:44:13:59
+  function connectNativeAPK() {
+    if (!window.ble) return;
+    document.getElementById('statusText').textContent = "⚡ Direktverbindung zu " + TARGET_MAC + "...";
+
+    // Direktverbindung über MAC-Adresse
+    window.ble.connect(
+      TARGET_MAC,
+      () => onNativeConnected(),
+      () => {
+        // Falls Android-BLE-Cache kalt ist: 1.5 Sek. Hintergrund-Scan und sofort verbinden
+        window.ble.startScan(
+          [],
+          (device) => {
+            if (device.id === TARGET_MAC || (device.name && device.name.startsWith("LEDnet"))) {
+              window.ble.stopScan(() => {}, () => {});
+              window.ble.connect(device.id, () => onNativeConnected(), () => onDisconnectedUI());
+            }
+          },
+          () => onDisconnectedUI()
+        );
+        setTimeout(() => {
+          if (!isNativeConnected) window.ble.stopScan(() => {}, () => {});
+        }, 2500);
+      }
+    );
+  }
+
+  function onNativeConnected() {
+    isNativeConnected = true;
+    document.getElementById('statusText').textContent = "✅ Direkt verbunden (APK)";
+    const btn = document.getElementById('connBtn');
+    btn.textContent = "Verbunden";
+    btn.classList.add('connected');
+  }
+
+  // CHROME BROWSER FALLBACK
+  async function trySilentWebReconnect() {
+    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
+      document.getElementById('statusText').textContent = "Bereit (Rechts auf Verbinden tippen)";
+      return;
+    }
+    try {
+      const devices = await navigator.bluetooth.getDevices();
+      if (devices.length > 0) {
+        bleDevice = devices[0];
+        await connectWebGATT(bleDevice);
+      } else {
+        document.getElementById('statusText').textContent = "Bereit zum Verbinden";
+      }
+    } catch (e) {}
+  }
+
+  async function connectWebBLE() {
+    try {
+      document.getElementById('statusText').textContent = "Wähle deinen Controller...";
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [
+          { services: [SERVICE_UUID] },
+          { namePrefix: "LEDnet" },
+          { namePrefix: "IOTBT" }
+        ],
+        optionalServices: [SERVICE_UUID]
+      });
+      await connectWebGATT(bleDevice);
+    } catch (err) {
+      document.getElementById('statusText').textContent = "Nicht verbunden";
+    }
+  }
+
+  async function connectWebGATT(device) {
+    try {
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      writeChar = await service.getCharacteristic(WRITE_UUID);
+
+      document.getElementById('statusText').textContent = "✅ " + (device.name || "Verbunden");
+      const btn = document.getElementById('connBtn');
+      btn.textContent = "Verbunden";
+      btn.classList.add('connected');
+
+      device.removeEventListener('gattserverdisconnected', onDisconnectedUI);
+      device.addEventListener('gattserverdisconnected', onDisconnectedUI);
+    } catch (e) {
+      document.getElementById('statusText').textContent = "Tippe rechts auf Verbinden";
+    }
+  }
+
+  function onDisconnectedUI() {
+    writeChar = null;
+    isNativeConnected = false;
+    document.getElementById('statusText').textContent = "Getrennt – tippe zum Verbinden";
+    const btn = document.getElementById('connBtn');
+    btn.textContent = "🔗 Verbinden";
+    btn.classList.remove('connected');
+  }
+
+  // ================= SZENEN-LISTE UNTEN =================
+  function buildCssPreview(scene) {
+    const sorted = [...scene.stops].sort((a, b) => a.pos - b.pos);
+    if (sorted.length === 0) return "#000";
+    if (sorted.length === 1) return sorted[0].color;
+
+    if (scene.mode === 'step') {
+      let parts = [];
+      for (let i = 0; i < sorted.length; i++) {
+        const startPct = ((i === 0 ? 0 : sorted[i].pos) / TOTAL_LEDS * 100).toFixed(1);
+        const endPct = ((i === sorted.length - 1 ? TOTAL_LEDS : sorted[i + 1].pos) / TOTAL_LEDS * 100).toFixed(1);
+        parts.push(`${sorted[i].color} ${startPct}%`, `${sorted[i].color} ${endPct}%`);
+      }
+      return `linear-gradient(90deg, ${parts.join(', ')})`;
+    } else {
+      const stopsStr = sorted.map(s => `${s.color} ${(s.pos / TOTAL_LEDS * 100).toFixed(1)}%`).join(', ');
+      return `linear-gradient(90deg, ${stopsStr})`;
+    }
+  }
+
+  function renderSceneList() {
+    const list = document.getElementById('sceneList');
+    list.innerHTML = '';
+    scenes.forEach(sc => {
+      const card = document.createElement('div');
+      card.className = 'scene-card' + (activeModeType === 'scene' && sc.id === activeSceneId ? ' active' : '');
+      card.onclick = () => activateScene(sc.id);
+
+      const header = document.createElement('div');
+      header.className = 'scene-header';
+
+      const title = document.createElement('span');
+      title.className = 'scene-title';
+      title.textContent = sc.name;
+
+      const dots = document.createElement('button');
+      dots.className = 'dots-btn';
+      dots.textContent = '•••';
+      dots.onclick = (e) => { e.stopPropagation(); openEditor(sc.id); };
+
+      header.appendChild(title);
+      header.appendChild(dots);
+
+      const bar = document.createElement('div');
+      bar.className = 'gradient-bar';
+      bar.style.background = buildCssPreview(sc);
+
+      card.appendChild(header);
+      card.appendChild(bar);
+      list.appendChild(card);
+    });
+  }
+
+  function activateScene(id) {
+    activeModeType = 'scene';
+    activeSceneId = id;
+    clearSelectionHighlights();
+    renderSceneList();
+    setPowerVisualState(true);
+    sendCurrentActiveOutput(0);
+  }
+
+  // ================= EDITOR ("ERSTELLEN") + LASERPOINTER + SPIEGELN =================
+  function openEditor(id) {
+    const original = scenes.find(s => s.id === id);
+    editingScene = JSON.parse(JSON.stringify(original));
+    lastTouchedStopIdx = 0;
+    document.getElementById('laserPointerToggle').checked = false;
+    document.getElementById('editSceneName').value = editingScene.name;
+    document.getElementById('mainView').classList.add('hidden');
+    document.getElementById('editorView').classList.remove('hidden');
+    renderEditor();
+  }
+
+  function createNewScene() {
+    const newId = Date.now();
+    const newSc = {
+      id: newId,
+      name: "Einstellung " + (scenes.length + 1),
+      mode: "gradient",
+      stops: [{ pos: 25, color: "#ff0055" }, { pos: 155, color: "#00ccff" }]
+    };
+    scenes.push(newSc);
+    saveStorage();
+    openEditor(newId);
+  }
+
+  function closeEditor() {
+    document.getElementById('laserPointerToggle').checked = false;
+    editingScene = null;
+    document.getElementById('editorView').classList.add('hidden');
+    document.getElementById('mainView').classList.remove('hidden');
+    renderSceneList();
+    sendCurrentActiveOutput(0);
+  }
+
+  function saveEditorScene() {
+    editingScene.name = document.getElementById('editSceneName').value.trim() || "Einstellung";
+    const idx = scenes.findIndex(s => s.id === editingScene.id);
+    if (idx !== -1) scenes[idx] = editingScene;
+    activeModeType = 'scene';
+    activeSceneId = editingScene.id;
+    saveStorage();
+    closeEditor();
+  }
+
+  function deleteCurrentScene() {
+    if (scenes.length <= 1) return;
+    scenes = scenes.filter(s => s.id !== editingScene.id);
+    if (activeSceneId === editingScene.id) activeSceneId = scenes[0].id;
+    saveStorage();
+    closeEditor();
+  }
+
+  function setEditMode(mode) {
+    editingScene.mode = mode;
+    renderEditor();
+    triggerEditorLiveSend();
+  }
+
+  function mirrorEditorScene() {
+    editingScene.stops.forEach(st => { st.pos = TOTAL_LEDS - st.pos; });
+    renderEditor();
+    triggerEditorLiveSend();
+  }
+
+  function onLaserToggle() {
+    triggerEditorLiveSend();
+  }
+
+  function renderEditor() {
+    document.getElementById('modeGradBtn').classList.toggle('active', editingScene.mode === 'gradient');
+    document.getElementById('modeStepBtn').classList.toggle('active', editingScene.mode === 'step');
+    updateEditorPreviewOnly();
+
+    const container = document.getElementById('stopsContainer');
+    container.innerHTML = '';
+    editingScene.stops.forEach((st, idx) => {
+      const row = document.createElement('div');
+      row.className = 'stop-row';
+      row.innerHTML = `
+        <div class="stop-top">
+          <div class="stop-left">
+            <div class="stop-num">${idx + 1}</div>
+            <div class="color-swatch-wrap" id="swatch_${idx}" style="background:${st.color}">
+              <input type="color" value="${st.color}" oninput="onStopColor(${idx}, this.value)">
+            </div>
+            <span id="posLabel_${idx}" style="font-size:0.95rem;">Position: ${st.pos}</span>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="off-chip" onclick="onStopColor(${idx}, '#000000')">⬛ Aus</button>
+            <button class="text-btn" style="padding:2px 6px; color:#9ca3af;" onclick="removeStop(${idx})">🗑️</button>
+          </div>
+        </div>
+        <div class="slider-line">
+          <button class="step-btn" onclick="stepPos(${idx}, -1)">−</button>
+          <span style="font-size:0.8rem; color:#9ca3af;">0</span>
+          <input type="range" id="posSlider_${idx}" min="0" max="180" value="${st.pos}" oninput="onStopPos(${idx}, this.value)">
+          <span style="font-size:0.8rem; color:#9ca3af;">180</span>
+          <button class="step-btn" onclick="stepPos(${idx}, 1)">+</button>
+        </div>
+      `;
+      container.appendChild(row);
+    });
+  }
+
+  function updateEditorPreviewOnly() {
+    document.getElementById('editorPreviewBar').style.background = buildCssPreview(editingScene);
+    const markers = document.getElementById('editorMarkers');
+    markers.innerHTML = '';
+    editingScene.stops.forEach(st => {
+      const dot = document.createElement('div');
+      dot.className = 'marker-dot';
+      dot.style.left = (st.pos / TOTAL_LEDS * 100) + '%';
+      dot.style.background = st.color;
+      markers.appendChild(dot);
+    });
+  }
+
+  function onStopColor(idx, hex) {
+    lastTouchedStopIdx = idx;
+    editingScene.stops[idx].color = hex;
+    const sw = document.getElementById('swatch_' + idx);
+    if (sw) sw.style.background = hex;
+    updateEditorPreviewOnly();
+    triggerEditorLiveSend();
+  }
+
+  function onStopPos(idx, val) {
+    lastTouchedStopIdx = idx;
+    const p = Math.max(0, Math.min(180, parseInt(val, 10)));
+    editingScene.stops[idx].pos = p;
+    const lbl = document.getElementById('posLabel_' + idx);
+    if (lbl) lbl.textContent = "Position: " + p;
+    updateEditorPreviewOnly();
+    triggerEditorLiveSend();
+  }
+
+  function stepPos(idx, delta) {
+    const next = Math.max(0, Math.min(180, editingScene.stops[idx].pos + delta));
+    const sl = document.getElementById('posSlider_' + idx);
+    if (sl) sl.value = next;
+    onStopPos(idx, next);
+  }
+
+  function addColorStop() {
+    if (editingScene.stops.length >= 8) return;
+    editingScene.stops.push({ pos: 90, color: "#00ffcc" });
+    lastTouchedStopIdx = editingScene.stops.length - 1;
+    renderEditor();
+    triggerEditorLiveSend();
+  }
+
+  function removeStop(idx) {
+    if (editingScene.stops.length <= 1) return;
+    editingScene.stops.splice(idx, 1);
+    lastTouchedStopIdx = 0;
+    renderEditor();
+    triggerEditorLiveSend();
+  }
+
+  function triggerEditorLiveSend() {
+    if (sendDebounce) clearTimeout(sendDebounce);
+    sendDebounce = setTimeout(() => {
+      if (!editingScene) return;
+      const laserActive = document.getElementById('laserPointerToggle').checked;
+      if (laserActive) {
+        const stop = editingScene.stops[lastTouchedStopIdx] || editingScene.stops[0];
+        sendLaserPointer(stop.pos, stop.color);
+      } else {
+        sendSceneBytes(editingScene, 0);
+      }
+    }, 120);
+  }
+
+  // ================= KALIBRIERUNG & HELLIGKEIT =================
+  function toggleSettingsPanel() {
+    document.getElementById('settingsPanel').classList.toggle('hidden');
+  }
+
+  function updateCalib() {
+    greenDampEnd = parseInt(document.getElementById('gDampSlider').value, 10);
+    redDampEnd   = parseInt(document.getElementById('rDampSlider').value, 10);
+    document.getElementById('gDampVal').textContent = greenDampEnd;
+    document.getElementById('rDampVal').textContent = redDampEnd;
+    saveStorage();
+    sendCurrentActiveOutput(0);
+  }
+
+  function onBrightnessChange(val) {
+    globalBrightness = parseInt(val, 10);
+    document.getElementById('brightVal').textContent = globalBrightness;
+    if (sendDebounce) clearTimeout(sendDebounce);
+    sendDebounce = setTimeout(() => {
+      if (editingScene) {
+        triggerEditorLiveSend();
+      } else {
+        sendCurrentActiveOutput(0);
+      }
+    }, 130);
+  }
+
+  function sendCurrentActiveOutput(sunsetProgress) {
+    if (activeModeType === 'solid') {
+      const virtualSolid = {
+        mode: 'gradient',
+        stops: [{ pos: 0, color: activeSolidHex }, { pos: 180, color: activeSolidHex }]
+      };
+      sendSceneBytes(virtualSolid, sunsetProgress);
+    } else {
+      const sc = scenes.find(s => s.id === activeSceneId) || scenes[0];
+      if (sc) sendSceneBytes(sc, sunsetProgress);
+    }
+  }
+
+  // ================= 180 LEDs BERECHNEN & PER BLE SENDEN =================
+  function hexToRgb(hex) {
+    const num = parseInt(hex.replace('#', ''), 16);
+    return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+  }
+
+  async function sendLaserPointer(pos, hexColor) {
+    const targetIdx = Math.min(TOTAL_LEDS - 1, Math.max(0, pos === 180 ? 179 : pos));
+    const rgb = (hexColor.toLowerCase() === '#000000') ? [255, 255, 255] : hexToRgb(hexColor);
+    const out = [];
+    for (let i = 0; i < TOTAL_LEDS; i++) {
+      if (i === targetIdx) out.push(rgb[0], rgb[1], rgb[2]);
+      else out.push(0, 0, 0);
+    }
+    await transmit540Rgb(out);
+  }
+
+  function compute180Leds(scene, sunsetProgress = 0) {
+    const sorted = [...scene.stops].sort((a, b) => a.pos - b.pos).map(s => ({
+      pos: s.pos,
+      rgb: hexToRgb(s.color)
+    }));
+    const out = [];
+    const bFactor = (globalBrightness / 100) * Math.pow(1 - sunsetProgress, 1.3);
+
+    for (let i = 0; i < TOTAL_LEDS; i++) {
+      let r = 0, g = 0, b = 0;
+      if (scene.mode === 'step') {
+        let chosen = sorted[0].rgb;
+        for (const st of sorted) { if (i >= st.pos) chosen = st.rgb; }
+        [r, g, b] = chosen;
+      } else {
+        if (i <= sorted[0].pos) [r, g, b] = sorted[0].rgb;
+        else if (i >= sorted[sorted.length - 1].pos) [r, g, b] = sorted[sorted.length - 1].rgb;
+        else {
+          for (let k = 0; k < sorted.length - 1; k++) {
+            const A = sorted[k], B = sorted[k + 1];
+            if (i >= A.pos && i <= B.pos) {
+              const t = (i - A.pos) / Math.max(1, B.pos - A.pos);
+              r = A.rgb[0] + t * (B.rgb[0] - A.rgb[0]);
+              g = A.rgb[1] + t * (B.rgb[1] - A.rgb[1]);
+              b = A.rgb[2] + t * (B.rgb[2] - A.rgb[2]);
+              break;
+            }
+          }
+        }
+      }
+
+      if (i > 80 && b > 100 && g > 100) {
+        const curve = Math.pow((i - 80) / 100, 1.5);
+        g *= (1 - (greenDampEnd / 100) * curve);
+        r *= (1 - (redDampEnd / 100) * curve);
+      }
+
+      if (sunsetProgress > 0) {
+        r *= Math.pow(1 - sunsetProgress, 0.8);
+        g *= Math.pow(1 - sunsetProgress, 1.6);
+        b *= Math.pow(1 - sunsetProgress, 3.0);
+      }
+
+      r *= bFactor;
+      g *= bFactor;
+      b *= bFactor;
+
+      out.push(Math.round(r), Math.round(g), Math.round(b));
+    }
+    return out;
+  }
+
+  // Hybrider Byte-Sender: Nutzt in der APK window.ble und im Browser Web-Bluetooth
+  async function writeRawBytes(uint8Array) {
+    if (window.ble && isNativeConnected) {
+      return new Promise((resolve) => {
+        window.ble.writeWithoutResponse(
+          TARGET_MAC,
+          "ffff",
+          "ff01",
+          uint8Array.buffer,
+          () => resolve(),
+          () => resolve()
+        );
+      });
+    }
+    if (!writeChar) return;
+    try {
+      if (writeChar.writeValueWithoutResponse) await writeChar.writeValueWithoutResponse(uint8Array);
+      else await writeChar.writeValue(uint8Array);
+    } catch (e) {}
+  }
+
+  async function sendPower(on) {
+    packetCounter = (packetCounter + 1) & 0xFF;
+    const header = [0x00, packetCounter, 0x80, 0x00, 0x00, 0x0d, 0x0e, 0x0b];
+    const payload = [0x3b, on ? 0x23 : 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00];
+    let sum = 0;
+    for (let b of payload) sum += b;
+    await writeRawBytes(new Uint8Array([...header, ...payload, sum & 0xFF]));
+  }
+
+  async function sendSceneBytes(scene, sunsetProgress = 0) {
+    if (!writeChar && !isNativeConnected) return;
+    const rgbBytes = compute180Leds(scene, sunsetProgress);
+    await transmit540Rgb(rgbBytes);
+  }
+
+  async function transmit540Rgb(rgbBytes) {
+    const totalLenWord = 549;
+    const lenHi = (totalLenWord >> 8) & 0xFF;
+    const lenLo = totalLenWord & 0xFF;
+    const tail = [0x00, 0x00, 0x01, 0x64, 0x01];
+
+    const commandBody = [0x59, lenHi, lenLo, ...rgbBytes, ...tail];
+    let sum = 0;
+    for (let b of commandBody) sum += b;
+    const fullPayload = [...commandBody, sum & 0xFF];
+
+    packetCounter = (packetCounter + 1) & 0xFF;
+    const chunkSize = 165;
+    const totalChunks = Math.ceil(fullPayload.length / chunkSize);
+
+    for (let fragIdx = 0; fragIdx < totalChunks; fragIdx++) {
+      const slice = fullPayload.slice(fragIdx * chunkSize, (fragIdx + 1) * chunkSize);
+      const isLast = (fragIdx === totalChunks - 1);
+      const fragFlag = isLast ? 0x80 : 0x00;
+      let packet;
+      if (fragIdx === 0) {
+        packet = new Uint8Array([0x40, packetCounter, fragFlag, 0x00, lenHi, lenLo, slice.length + 1, 0x0b, ...slice]);
+      } else {
+        packet = new Uint8Array([0x40, packetCounter, fragFlag, fragIdx, slice.length, ...slice]);
+      }
+      await writeRawBytes(packet);
+      await new Promise(r => setTimeout(r, 18));
+    }
+  }
+</script>
+
+</body>
+</html>
