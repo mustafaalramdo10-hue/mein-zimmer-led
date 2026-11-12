@@ -36,7 +36,6 @@
       gap: 12px;
     }
 
-    /* WIDGET / SPRACH-FEEDBACK BANNER */
     .cmd-toast {
       background: linear-gradient(90deg, #0284c7, #2563eb);
       color: #fff;
@@ -67,25 +66,27 @@
       background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.14);
       color: #fff;
-      width: 42px;
-      height: 42px;
+      width: 44px;
+      height: 44px;
       border-radius: 50%;
       font-size: 1.15rem;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
+      padding: 0;
       transition: all 0.2s;
     }
     .power-toggle.is-on {
       background: #22c55e;
       border-color: #4ade80;
       box-shadow: 0 0 14px rgba(34, 197, 94, 0.55);
+      color: #ffffff;
     }
     .power-toggle.is-off {
       background: #2a181b;
       border-color: #ef4444;
-      color: #fca5a5;
+      color: #f87171;
     }
 
     /* VERBINDUNG & SLIDER */
@@ -347,7 +348,6 @@
 
 <div class="app">
 
-  <!-- FEEDBACK BANNER FÜR WIDGET & GOOGLE ASSISTANT -->
   <div id="cmdToast" class="cmd-toast hidden">⚡ Befehl wird ausgeführt...</div>
 
   <!-- ================= HAUPTANSICHT ================= -->
@@ -358,8 +358,14 @@
         <h1>LumenControl</h1>
       </div>
       <div class="top-actions">
-        <button class="icon-btn" title="Kalibrierung & Widget-Optionen" onclick="toggleSettingsPanel()">⚙️</button>
-        <button id="powerToggleBtn" class="icon-btn power-toggle is-on" title="Ein / Aus" onclick="togglePower()">⏻</button>
+        <button class="icon-btn" title="Einstellungen" onclick="toggleSettingsPanel()">⚙️</button>
+        <!-- ECHTES VEKTOR-POWER-ICON (SVG) STATT KAPUTTEM SCHRIFTZEICHEN -->
+        <button id="powerToggleBtn" class="icon-btn power-toggle is-on" title="Ein / Aus" onclick="togglePower()" aria-label="Ein / Aus">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+            <line x1="12" y1="2" x2="12" y2="12"></line>
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -369,11 +375,11 @@
       <button id="connBtn" class="conn-btn" onclick="connectManualOrNative()">🔗 Verbinden</button>
     </div>
 
-    <!-- EINSTELLUNGEN: KALIBRIERUNG, AUTO-START & BACKUP -->
+    <!-- EINSTELLUNGEN: KALIBRIERUNG, AUTO-START, LIVE-UPDATE & BACKUP -->
     <div id="settingsPanel" class="preview-box hidden">
       <div style="font-weight:600; margin-bottom:8px; font-size:0.92rem;">🤖 Sprach- & Widget-Verhalten</div>
       <label style="display:flex; justify-content:space-between; align-items:center; font-size:0.83rem; margin-bottom:10px; color:#d1d5db;">
-        <span>Beim Öffnen der App sofort ⭐-Modus senden (ideal für „Hey Google, öffne LumenControl“)</span>
+        <span>Beim Öffnen sofort ⭐-Modus senden</span>
         <input type="checkbox" id="autoApplyFavCheck" checked onchange="saveStorage()">
       </label>
 
@@ -391,7 +397,17 @@
         <input type="range" id="warmGreenSlider" min="35" max="130" value="75" style="width:100%" oninput="updateWarmTone()">
       </div>
 
+      <!-- NEU: LIVE-UPDATE OHNE NEUE APK -->
       <div style="border-top:1px solid #2b3240; padding-top:10px; margin-top:8px;">
+        <div style="font-weight:600; margin-bottom:6px; font-size:0.9rem;">🔄 Live-Update (künftig ohne neue APK!)</div>
+        <input type="text" id="ghRepoInput" class="name-input" style="margin:4px 0 8px 0; font-size:0.82rem;" placeholder="DeinGitHubName/mein-zimmer-led">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <button class="mirror-btn" onclick="pullLiveUpdateFromGitHub()">☁️ Von GitHub laden</button>
+          <button class="mirror-btn" onclick="resetLiveUpdate()">↩️ Auf Standard</button>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid #2b3240; padding-top:10px; margin-top:10px;">
         <div style="font-weight:600; margin-bottom:6px; font-size:0.9rem;">💾 Backup (Export / Import)</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
           <button class="mirror-btn" onclick="exportBackup()">📋 Backup kopieren</button>
@@ -417,7 +433,6 @@
         <span style="font-size:0.74rem; color:var(--gold);">⭐ = Dein Widget-Modus</span>
       </div>
 
-      <!-- 2 ALLTAGSLICHT-BUTTONS -->
       <div class="white-row">
         <button id="solid_warm" class="white-pill" style="background:linear-gradient(90deg,#ff9e44,#ff6b1a);" onclick="selectWarmWhite()">
           <span>🕯️ Warmweiß</span>
@@ -429,7 +444,6 @@
         </button>
       </div>
 
-      <!-- 7 DIREKTE FARBPUNKTE + FREIER FARBWÄHLER -->
       <div class="color-dots-grid">
         <button id="solid_red"    class="c-dot" style="background:#ff0000" title="Rot"    onclick="selectSolidColor('#ff0000', 'solid_red')"></button>
         <button id="solid_orange" class="c-dot" style="background:#ff5500" title="Orange" onclick="selectSolidColor('#ff5500', 'solid_orange')"></button>
@@ -511,6 +525,17 @@
 </div>
 
 <script>
+  // Prüft beim Start, ob ein Live-Update von GitHub im Speicher liegt
+  (function checkCachedLiveUpdate() {
+    const cachedHtml = localStorage.getItem('lumen_ota_html');
+    if (cachedHtml && !window.__lumenOtaApplied) {
+      window.__lumenOtaApplied = true;
+      document.open();
+      document.write(cachedHtml);
+      document.close();
+    }
+  })();
+
   const TARGET_MAC   = "08:65:F0:44:13:59";
   const SERVICE_UUID = 0xffff;
   const WRITE_UUID   = 0xff01;
@@ -527,11 +552,9 @@
   let activeSceneId = 1;
   let activeSolidHex = '#ffffff';
 
-  // Welcher Modus liegt auf dem ⭐-Widget-Knopf? ('warm', 'day', oder Szenen-ID als Zahl)
   let widgetFavTarget = 1;
   let autoApplyFavOnStart = true;
 
-  // Warteschlange für Widget- & Sprachbefehle, falls App beim Klick kalt gestartet wurde
   let pendingExternalCmd = null;
   let lastExternalCmdTs = 0;
   let didInitialAutoSend = false;
@@ -606,12 +629,45 @@
     }, 400);
   });
 
+  // ================= LIVE-UPDATE DIREKT VON GITHUB (OHNE APK) =================
+  async function pullLiveUpdateFromGitHub() {
+    const repo = document.getElementById('ghRepoInput').value.trim();
+    if (!repo || !repo.includes('/')) {
+      showToast("Bitte GitHubName/Repository-Name eingeben!");
+      return;
+    }
+    localStorage.setItem('lumen_gh_repo', repo);
+    showToast("☁️ Lade neueste index.html von GitHub...");
+    try {
+      let res = await fetch(`https://raw.githubusercontent.com/${repo}/main/index.html?t=${Date.now()}`);
+      if (!res.ok) {
+        res = await fetch(`https://raw.githubusercontent.com/${repo}/master/index.html?t=${Date.now()}`);
+      }
+      if (!res.ok) throw new Error("Datei nicht gefunden");
+      let html = await res.text();
+      if (!html.includes("cordova.js")) {
+        html = html.replace("</body>", '<script src="cordova.js"><\/script></body>');
+      }
+      localStorage.setItem('lumen_ota_html', html);
+      showToast("✅ Update geladen! Starte Oberfläche neu...");
+      setTimeout(() => location.reload(), 900);
+    } catch (e) {
+      showToast("❌ Konnte nicht geladen werden (Ist das Repo Public?)");
+    }
+  }
+
+  function resetLiveUpdate() {
+    localStorage.removeItem('lumen_ota_html');
+    showToast("↩️ Auf APK-Standard zurückgesetzt");
+    setTimeout(() => location.reload(), 700);
+  }
+
   // ================= EMPFÄNGER FÜR ANDROID WIDGET & SHORTCUTS =================
   window.runExternalCommand = function(cmd, ts) {
     if (ts && ts === lastExternalCmdTs) return;
     if (ts) lastExternalCmdTs = ts;
 
-    showToast("⚡ Widget/Sprachbefehl: " + (cmd === 'toggle' ? 'Ein/Aus' : cmd === 'timer60' ? '1h Timer' : '⭐ Favoriten-Modus'));
+    showToast("⚡ Befehl: " + (cmd === 'toggle' ? 'Ein/Aus' : cmd === 'timer60' ? '1h Timer' : '⭐ Favoriten-Modus'));
 
     if (isNativeConnected || writeChar) {
       executeExternalCmdNow(cmd);
@@ -645,7 +701,6 @@
     setTimeout(() => el.classList.add('hidden'), 3200);
   }
 
-  // Setzt den Modus für den ⭐-Button auf dem Home-Widget
   function setWidgetFav(e, target) {
     e.stopPropagation();
     widgetFavTarget = target;
@@ -688,6 +743,7 @@
     const wG = localStorage.getItem('zengge_warmGreen_v2');
     const wFav = localStorage.getItem('zengge_widgetFav');
     const aFav = localStorage.getItem('zengge_autoApplyFav');
+    const savedRepo = localStorage.getItem('lumen_gh_repo');
 
     if (gD !== null) greenDampEnd = parseInt(gD, 10);
     if (rD !== null) redDampEnd = parseInt(rD, 10);
@@ -696,6 +752,7 @@
       widgetFavTarget = (wFav === 'warm' || wFav === 'day') ? wFav : parseInt(wFav, 10);
     }
     if (aFav !== null) autoApplyFavOnStart = (aFav === 'true');
+    if (savedRepo) document.getElementById('ghRepoInput').value = savedRepo;
     loadStorageUI();
   }
 
@@ -719,7 +776,6 @@
     document.getElementById('autoApplyFavCheck').checked = autoApplyFavOnStart;
   }
 
-  // ================= BACKUP EXPORT / IMPORT =================
   function exportBackup() {
     const payload = JSON.stringify({ scenes, greenDampEnd, redDampEnd, warmGreenByte, widgetFavTarget });
     const area = document.getElementById('backupArea');
@@ -751,7 +807,6 @@
     }
   }
 
-  // ================= EIN / AUS TOGGLE =================
   function setPowerVisualState(on) {
     isPowerOn = on;
     const btn = document.getElementById('powerToggleBtn');
@@ -765,7 +820,6 @@
     sendPower(nextState);
   }
 
-  // ================= DIREKTE FARBEN =================
   function clearSelectionHighlights() {
     document.querySelectorAll('.white-pill, .c-dot, .scene-card').forEach(el => el.classList.remove('active'));
   }
@@ -793,7 +847,6 @@
     selectWarmWhite();
   }
 
-  // ================= AUSSCHALT-TIMER + SONNENUNTERGANG =================
   function startTimer(minutes) {
     cancelTimer(false);
     const now = Date.now();
@@ -869,13 +922,9 @@
     }
   }
 
-  // ================= BLUETOOTH: NATIVE APK & WEB FALLBACK =================
   function connectManualOrNative() {
-    if (window.ble) {
-      connectNativeAPK();
-    } else {
-      connectWebBLE();
-    }
+    if (window.ble) connectNativeAPK();
+    else connectWebBLE();
   }
 
   function connectNativeAPK() {
@@ -910,7 +959,6 @@
     btn.textContent = "Verbunden";
     btn.classList.add('connected');
 
-    // Falls die App über ein Home-Widget oder Sprachbefehl geöffnet wurde:
     if (pendingExternalCmd) {
       const cmd = pendingExternalCmd;
       pendingExternalCmd = null;
@@ -922,10 +970,7 @@
   }
 
   async function trySilentWebReconnect() {
-    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
-      document.getElementById('statusText').textContent = "Bereit";
-      return;
-    }
+    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
     try {
       const devices = await navigator.bluetooth.getDevices();
       if (devices.length > 0) {
@@ -972,7 +1017,6 @@
     btn.classList.remove('connected');
   }
 
-  // ================= SZENEN-LISTE UNTEN (INKL. ⭐-BUTTON) =================
   function buildCssPreview(scene) {
     const sorted = [...scene.stops].sort((a, b) => a.pos - b.pos);
     if (sorted.length === 0) return "#000";
@@ -1014,7 +1058,6 @@
       const star = document.createElement('button');
       star.className = 'star-btn' + (isWidgetFav ? ' is-fav' : '');
       star.textContent = isWidgetFav ? '⭐' : '☆';
-      star.title = "Als Widget-Modus festlegen";
       star.onclick = (e) => setWidgetFav(e, sc.id);
 
       const dots = document.createElement('button');
@@ -1046,7 +1089,6 @@
     sendCurrentActiveOutput(0);
   }
 
-  // ================= EDITOR ("ERSTELLEN") =================
   function openEditor(id) {
     const original = scenes.find(s => s.id === id);
     editingScene = JSON.parse(JSON.stringify(original));
@@ -1253,7 +1295,6 @@
     }
   }
 
-  // ================= 180 LEDs BERECHNEN & SENDEN =================
   function hexToRgb(hex) {
     const num = parseInt(hex.replace('#', ''), 16);
     return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
