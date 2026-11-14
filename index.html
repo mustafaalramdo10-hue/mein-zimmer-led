@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>LumenControl</title>
+  <title>LumenControl 7.1</title>
   <style>
     :root {
       --bg: #0b0e14;
@@ -359,7 +359,6 @@
       </div>
       <div class="top-actions">
         <button class="icon-btn" title="Einstellungen" onclick="toggleSettingsPanel()">⚙️</button>
-        <!-- ECHTES VEKTOR-POWER-ICON (SVG) STATT KAPUTTEM SCHRIFTZEICHEN -->
         <button id="powerToggleBtn" class="icon-btn power-toggle is-on" title="Ein / Aus" onclick="togglePower()" aria-label="Ein / Aus">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
@@ -375,12 +374,12 @@
       <button id="connBtn" class="conn-btn" onclick="connectManualOrNative()">🔗 Verbinden</button>
     </div>
 
-    <!-- EINSTELLUNGEN: KALIBRIERUNG, AUTO-START, LIVE-UPDATE & BACKUP -->
+    <!-- EINSTELLUNGEN -->
     <div id="settingsPanel" class="preview-box hidden">
-      <div style="font-weight:600; margin-bottom:8px; font-size:0.92rem;">🤖 Sprach- & Widget-Verhalten</div>
+      <div style="font-weight:600; margin-bottom:8px; font-size:0.92rem;">🤖 Start- & Sprach-Verhalten</div>
       <label style="display:flex; justify-content:space-between; align-items:center; font-size:0.83rem; margin-bottom:10px; color:#d1d5db;">
-        <span>Beim Öffnen sofort ⭐-Modus senden</span>
-        <input type="checkbox" id="autoApplyFavCheck" checked onchange="saveStorage()">
+        <span>Beim normalen App-Start sofort ⭐-Modus einschalten</span>
+        <input type="checkbox" id="autoApplyFavCheck" onchange="saveStorage()">
       </label>
 
       <div style="border-top:1px solid #2b3240; padding-top:10px; font-weight:600; margin-bottom:8px; font-size:0.92rem;">✨ Weiß- & Warmton-Kalibrierung</div>
@@ -397,9 +396,9 @@
         <input type="range" id="warmGreenSlider" min="35" max="130" value="75" style="width:100%" oninput="updateWarmTone()">
       </div>
 
-      <!-- NEU: LIVE-UPDATE OHNE NEUE APK -->
+      <!-- LIVE-UPDATE OHNE NEUE APK -->
       <div style="border-top:1px solid #2b3240; padding-top:10px; margin-top:8px;">
-        <div style="font-weight:600; margin-bottom:6px; font-size:0.9rem;">🔄 Live-Update (künftig ohne neue APK!)</div>
+        <div style="font-weight:600; margin-bottom:6px; font-size:0.9rem;">🔄 Live-Update (ohne neue APK!)</div>
         <input type="text" id="ghRepoInput" class="name-input" style="margin:4px 0 8px 0; font-size:0.82rem;" placeholder="DeinGitHubName/mein-zimmer-led">
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
           <button class="mirror-btn" onclick="pullLiveUpdateFromGitHub()">☁️ Von GitHub laden</button>
@@ -545,6 +544,8 @@
   let writeChar = null;
   let isNativeConnected = false;
   let packetCounter = 1;
+
+  // FIX 1: Power-Status wird jetzt aus dem Speicher geladen statt blind auf true zu stehen
   let isPowerOn = true;
   let globalBrightness = 85;
 
@@ -553,7 +554,7 @@
   let activeSolidHex = '#ffffff';
 
   let widgetFavTarget = 1;
-  let autoApplyFavOnStart = true;
+  let autoApplyFavOnStart = false; // Standardmäßig aus, damit der Ein/Aus-Zustand beim Öffnen exakt stimmt
 
   let pendingExternalCmd = null;
   let lastExternalCmdTs = 0;
@@ -567,10 +568,14 @@
   let redDampEnd   = 48;
   let warmGreenByte = 75;
 
+  // Timer & Hintergrund-Keep-Alive
   let timerStartTimestamp = null;
   let timerEndTimestamp = null;
   let timerInterval = null;
   let lastSunsetStep = -1;
+  let keepAliveAudioCtx = null;
+  let keepAliveOsc = null;
+  let wakeLockSentinel = null;
 
   const defaultScenes = [
     {
@@ -619,10 +624,18 @@
     loadStorage();
     renderSceneList();
     updateFavStarsUI();
+    resumeSavedTimerIfActive();
 
     document.addEventListener('deviceready', () => {
       connectNativeAPK();
     }, false);
+
+    // Wenn die App aus dem Hintergrund zurückgeholt wird, sofort Timer & Verbindung prüfen
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && timerEndTimestamp) {
+        updateTimerDisplay();
+      }
+    });
 
     setTimeout(() => {
       if (!window.ble) trySilentWebReconnect();
@@ -652,7 +665,7 @@
       showToast("✅ Update geladen! Starte Oberfläche neu...");
       setTimeout(() => location.reload(), 900);
     } catch (e) {
-      showToast("❌ Konnte nicht geladen werden (Ist das Repo Public?)");
+      showToast("❌ Fehler beim Laden (Ist das GitHub-Repo auf Public?)");
     }
   }
 
@@ -660,6 +673,42 @@
     localStorage.removeItem('lumen_ota_html');
     showToast("↩️ Auf APK-Standard zurückgesetzt");
     setTimeout(() => location.reload(), 700);
+  }
+
+  // ================= HINTERGRUND-KEEP-ALIVE FÜR DEN TIMER =================
+  async function enableBackgroundKeepAlive() {
+    // 1. Unhörbarer WebAudio-Oszillator verhindert, dass Android den Timer im Standby einfriert
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass && !keepAliveAudioCtx) {
+        keepAliveAudioCtx = new AudioContextClass();
+        keepAliveOsc = keepAliveAudioCtx.createOscillator();
+        const gain = keepAliveAudioCtx.createGain();
+        gain.gain.value = 0.0001; // Unhörbar leise
+        keepAliveOsc.connect(gain);
+        gain.connect(keepAliveAudioCtx.destination);
+        keepAliveOsc.start();
+      } else if (keepAliveAudioCtx && keepAliveAudioCtx.state === 'suspended') {
+        await keepAliveAudioCtx.resume();
+      }
+    } catch (e) {}
+
+    // 2. WakeLock anfordern (falls vom System unterstützt)
+    try {
+      if ('wakeLock' in navigator && !wakeLockSentinel) {
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) {}
+  }
+
+  function disableBackgroundKeepAlive() {
+    try {
+      if (keepAliveOsc) { keepAliveOsc.stop(); keepAliveOsc.disconnect(); keepAliveOsc = null; }
+      if (keepAliveAudioCtx) { keepAliveAudioCtx.close(); keepAliveAudioCtx = null; }
+    } catch (e) {}
+    try {
+      if (wakeLockSentinel) { wakeLockSentinel.release(); wakeLockSentinel = null; }
+    } catch (e) {}
   }
 
   // ================= EMPFÄNGER FÜR ANDROID WIDGET & SHORTCUTS =================
@@ -742,8 +791,9 @@
     const rD = localStorage.getItem('zengge_rDamp');
     const wG = localStorage.getItem('zengge_warmGreen_v2');
     const wFav = localStorage.getItem('zengge_widgetFav');
-    const aFav = localStorage.getItem('zengge_autoApplyFav');
+    const aFav = localStorage.getItem('zengge_autoApplyFav_v2');
     const savedRepo = localStorage.getItem('lumen_gh_repo');
+    const savedPower = localStorage.getItem('lumen_power_state');
 
     if (gD !== null) greenDampEnd = parseInt(gD, 10);
     if (rD !== null) redDampEnd = parseInt(rD, 10);
@@ -753,6 +803,12 @@
     }
     if (aFav !== null) autoApplyFavOnStart = (aFav === 'true');
     if (savedRepo) document.getElementById('ghRepoInput').value = savedRepo;
+
+    // Stellt den echten letzten Ein/Aus-Zustand beim App-Start wieder her (verhindert 2x Klicken!)
+    if (savedPower !== null) {
+      setPowerVisualState(savedPower === 'true');
+    }
+
     loadStorageUI();
   }
 
@@ -763,7 +819,7 @@
     localStorage.setItem('zengge_rDamp', redDampEnd);
     localStorage.setItem('zengge_warmGreen_v2', warmGreenByte);
     localStorage.setItem('zengge_widgetFav', String(widgetFavTarget));
-    localStorage.setItem('zengge_autoApplyFav', String(autoApplyFavOnStart));
+    localStorage.setItem('zengge_autoApplyFav_v2', String(autoApplyFavOnStart));
   }
 
   function loadStorageUI() {
@@ -807,8 +863,10 @@
     }
   }
 
+  // Speichert jede Änderung von Ein/Aus sofort im Handyspeicher
   function setPowerVisualState(on) {
     isPowerOn = on;
+    localStorage.setItem('lumen_power_state', on ? 'true' : 'false');
     const btn = document.getElementById('powerToggleBtn');
     btn.classList.toggle('is-on', on);
     btn.classList.toggle('is-off', !on);
@@ -847,12 +905,18 @@
     selectWarmWhite();
   }
 
+  // ================= AUSSCHALT-TIMER (MIT SPEICHERUNG & HINTERGRUND-SCHUTZ) =================
   function startTimer(minutes) {
     cancelTimer(false);
     const now = Date.now();
     timerStartTimestamp = now;
     timerEndTimestamp = now + minutes * 60 * 1000;
     lastSunsetStep = -1;
+
+    localStorage.setItem('lumen_timer_start', String(timerStartTimestamp));
+    localStorage.setItem('lumen_timer_end', String(timerEndTimestamp));
+
+    enableBackgroundKeepAlive();
 
     document.querySelectorAll('.t-pill').forEach(p => p.classList.remove('active'));
     const pill = document.getElementById('tp_' + minutes);
@@ -861,6 +925,25 @@
 
     updateTimerDisplay();
     timerInterval = setInterval(updateTimerDisplay, 1000);
+  }
+
+  function resumeSavedTimerIfActive() {
+    const savedEnd = localStorage.getItem('lumen_timer_end');
+    const savedStart = localStorage.getItem('lumen_timer_start');
+    if (!savedEnd) return;
+    const endTs = parseInt(savedEnd, 10);
+    const startTs = savedStart ? parseInt(savedStart, 10) : Date.now();
+    if (endTs > Date.now()) {
+      timerStartTimestamp = startTs;
+      timerEndTimestamp = endTs;
+      document.getElementById('tp_cancel').classList.remove('hidden');
+      enableBackgroundKeepAlive();
+      updateTimerDisplay();
+      timerInterval = setInterval(updateTimerDisplay, 1000);
+    } else {
+      localStorage.removeItem('lumen_timer_end');
+      localStorage.removeItem('lumen_timer_start');
+    }
   }
 
   function customTimerPrompt() {
@@ -876,6 +959,10 @@
     timerStartTimestamp = null;
     timerEndTimestamp = null;
     lastSunsetStep = -1;
+    localStorage.removeItem('lumen_timer_end');
+    localStorage.removeItem('lumen_timer_start');
+    disableBackgroundKeepAlive();
+
     document.querySelectorAll('.t-pill').forEach(p => p.classList.remove('active'));
     document.getElementById('tp_cancel').classList.add('hidden');
     if (resetText) {
@@ -906,7 +993,7 @@
       String(hrs).padStart(2, '0') + ":" + String(mins).padStart(2, '0') + ":" + String(secs).padStart(2, '0');
 
     const sunsetEnabled = document.getElementById('sunsetFadeCheck').checked;
-    const totalDuration = timerEndTimestamp - timerStartTimestamp;
+    const totalDuration = Math.max(1000, timerEndTimestamp - timerStartTimestamp);
     const fadeWindow = Math.min(10 * 60 * 1000, totalDuration * 0.5);
 
     if (sunsetEnabled && diffMs <= fadeWindow) {
@@ -922,6 +1009,7 @@
     }
   }
 
+  // ================= BLUETOOTH VERBINDUNG =================
   function connectManualOrNative() {
     if (window.ble) connectNativeAPK();
     else connectWebBLE();
@@ -1015,6 +1103,10 @@
     const btn = document.getElementById('connBtn');
     btn.textContent = "🔗 Verbinden";
     btn.classList.remove('connected');
+    // Falls gerade ein Timer aktiv ist, automatisch Reconnect versuchen
+    if (timerEndTimestamp && window.ble) {
+      setTimeout(() => connectNativeAPK(), 2500);
+    }
   }
 
   function buildCssPreview(scene) {
