@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>LumenControl 7.1</title>
+  <title>LumenControl 7.2</title>
   <style>
     :root {
       --bg: #0b0e14;
@@ -24,7 +24,8 @@
       padding: env(safe-area-inset-top, 12px) 0 130px 0;
       min-height: 100vh;
       display: flex;
-      justify-content: center;
+      flex-direction: column; /* Verhindert nebeneinanderliegende Doppel-Ansichten */
+      align-items: center;
       user-select: none;
     }
     .app {
@@ -524,16 +525,18 @@
 </div>
 
 <script>
-  // Prüft beim Start, ob ein Live-Update von GitHub im Speicher liegt
-  (function checkCachedLiveUpdate() {
-    const cachedHtml = localStorage.getItem('lumen_ota_html');
-    if (cachedHtml && !window.__lumenOtaApplied) {
-      window.__lumenOtaApplied = true;
-      document.open();
-      document.write(cachedHtml);
-      document.close();
+  // Selbstreinigung: Entfernt sofort versehentlich doppelt eingefügte .app-Container
+  function deduplicateDOM() {
+    const apps = document.querySelectorAll('.app');
+    if (apps.length > 1) {
+      for (let i = 1; i < apps.length; i++) apps[i].remove();
     }
-  })();
+    const docks = document.querySelectorAll('.timer-dock');
+    if (docks.length > 1) {
+      for (let i = 1; i < docks.length; i++) docks[i].remove();
+    }
+  }
+  deduplicateDOM();
 
   const TARGET_MAC   = "08:65:F0:44:13:59";
   const SERVICE_UUID = 0xffff;
@@ -545,7 +548,6 @@
   let isNativeConnected = false;
   let packetCounter = 1;
 
-  // FIX 1: Power-Status wird jetzt aus dem Speicher geladen statt blind auf true zu stehen
   let isPowerOn = true;
   let globalBrightness = 85;
 
@@ -554,7 +556,7 @@
   let activeSolidHex = '#ffffff';
 
   let widgetFavTarget = 1;
-  let autoApplyFavOnStart = false; // Standardmäßig aus, damit der Ein/Aus-Zustand beim Öffnen exakt stimmt
+  let autoApplyFavOnStart = false;
 
   let pendingExternalCmd = null;
   let lastExternalCmdTs = 0;
@@ -568,7 +570,6 @@
   let redDampEnd   = 48;
   let warmGreenByte = 75;
 
-  // Timer & Hintergrund-Keep-Alive
   let timerStartTimestamp = null;
   let timerEndTimestamp = null;
   let timerInterval = null;
@@ -621,6 +622,7 @@
   let scenes = [];
 
   window.addEventListener('DOMContentLoaded', () => {
+    deduplicateDOM();
     loadStorage();
     renderSceneList();
     updateFavStarsUI();
@@ -630,7 +632,6 @@
       connectNativeAPK();
     }, false);
 
-    // Wenn die App aus dem Hintergrund zurückgeholt wird, sofort Timer & Verbindung prüfen
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && timerEndTimestamp) {
         updateTimerDisplay();
@@ -642,7 +643,7 @@
     }, 400);
   });
 
-  // ================= LIVE-UPDATE DIREKT VON GITHUB (OHNE APK) =================
+  // ================= LIVE-UPDATE (OHNE DOPPEL-RENDERING) =================
   async function pullLiveUpdateFromGitHub() {
     const repo = document.getElementById('ghRepoInput').value.trim();
     if (!repo || !repo.includes('/')) {
@@ -650,20 +651,16 @@
       return;
     }
     localStorage.setItem('lumen_gh_repo', repo);
-    showToast("☁️ Lade neueste index.html von GitHub...");
+    showToast("☁️ Prüfe Verbindung zu GitHub...");
     try {
       let res = await fetch(`https://raw.githubusercontent.com/${repo}/main/index.html?t=${Date.now()}`);
       if (!res.ok) {
         res = await fetch(`https://raw.githubusercontent.com/${repo}/master/index.html?t=${Date.now()}`);
       }
       if (!res.ok) throw new Error("Datei nicht gefunden");
-      let html = await res.text();
-      if (!html.includes("cordova.js")) {
-        html = html.replace("</body>", '<script src="cordova.js"><\/script></body>');
-      }
-      localStorage.setItem('lumen_ota_html', html);
-      showToast("✅ Update geladen! Starte Oberfläche neu...");
-      setTimeout(() => location.reload(), 900);
+      localStorage.removeItem('lumen_ota_html'); // Alten fehlerhaften Cache löschen
+      showToast("✅ Verbunden! Lade Ansicht neu...");
+      setTimeout(() => location.reload(), 600);
     } catch (e) {
       showToast("❌ Fehler beim Laden (Ist das GitHub-Repo auf Public?)");
     }
@@ -671,20 +668,20 @@
 
   function resetLiveUpdate() {
     localStorage.removeItem('lumen_ota_html');
-    showToast("↩️ Auf APK-Standard zurückgesetzt");
-    setTimeout(() => location.reload(), 700);
+    deduplicateDOM();
+    showToast("↩️ Doppel-Ansicht bereinigt!");
+    setTimeout(() => location.reload(), 500);
   }
 
   // ================= HINTERGRUND-KEEP-ALIVE FÜR DEN TIMER =================
   async function enableBackgroundKeepAlive() {
-    // 1. Unhörbarer WebAudio-Oszillator verhindert, dass Android den Timer im Standby einfriert
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass && !keepAliveAudioCtx) {
         keepAliveAudioCtx = new AudioContextClass();
         keepAliveOsc = keepAliveAudioCtx.createOscillator();
         const gain = keepAliveAudioCtx.createGain();
-        gain.gain.value = 0.0001; // Unhörbar leise
+        gain.gain.value = 0.0001;
         keepAliveOsc.connect(gain);
         gain.connect(keepAliveAudioCtx.destination);
         keepAliveOsc.start();
@@ -693,7 +690,6 @@
       }
     } catch (e) {}
 
-    // 2. WakeLock anfordern (falls vom System unterstützt)
     try {
       if ('wakeLock' in navigator && !wakeLockSentinel) {
         wakeLockSentinel = await navigator.wakeLock.request('screen');
@@ -785,6 +781,7 @@
   }
 
   function loadStorage() {
+    localStorage.removeItem('lumen_ota_html'); // Bereinigt alten doppelten OTA-Speicher
     const saved = localStorage.getItem('zengge_scenes_v5');
     scenes = saved ? JSON.parse(saved) : defaultScenes;
     const gD = localStorage.getItem('zengge_gDamp');
@@ -804,7 +801,6 @@
     if (aFav !== null) autoApplyFavOnStart = (aFav === 'true');
     if (savedRepo) document.getElementById('ghRepoInput').value = savedRepo;
 
-    // Stellt den echten letzten Ein/Aus-Zustand beim App-Start wieder her (verhindert 2x Klicken!)
     if (savedPower !== null) {
       setPowerVisualState(savedPower === 'true');
     }
@@ -863,7 +859,6 @@
     }
   }
 
-  // Speichert jede Änderung von Ein/Aus sofort im Handyspeicher
   function setPowerVisualState(on) {
     isPowerOn = on;
     localStorage.setItem('lumen_power_state', on ? 'true' : 'false');
@@ -905,7 +900,7 @@
     selectWarmWhite();
   }
 
-  // ================= AUSSCHALT-TIMER (MIT SPEICHERUNG & HINTERGRUND-SCHUTZ) =================
+  // ================= AUSSCHALT-TIMER =================
   function startTimer(minutes) {
     cancelTimer(false);
     const now = Date.now();
@@ -1103,7 +1098,6 @@
     const btn = document.getElementById('connBtn');
     btn.textContent = "🔗 Verbinden";
     btn.classList.remove('connected');
-    // Falls gerade ein Timer aktiv ist, automatisch Reconnect versuchen
     if (timerEndTimestamp && window.ble) {
       setTimeout(() => connectNativeAPK(), 2500);
     }
