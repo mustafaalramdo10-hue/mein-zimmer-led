@@ -246,6 +246,7 @@ jobs:
           public class MainActivity extends BridgeActivity {
               @Override
               public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(SleepTimerPlugin.class);
                   super.onCreate(savedInstanceState);
                   handleActionIntent(getIntent());
               }
@@ -312,6 +313,497 @@ jobs:
               }
           }''')
 
+          # 6b. Nativer Ausschalt-Timer (läuft auch im Hintergrund / bei Bildschirm aus)
+          with open(f"{java_dir}/SleepTimerPlugin.java", "w") as f:
+              f.write(r'''package de.jgu.meinzimmer;
+
+          import android.Manifest;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.os.Build;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+
+          @CapacitorPlugin(name = "SleepTimer")
+          public class SleepTimerPlugin extends Plugin {
+
+              private long readLong(PluginCall call, String key) {
+                  Double d = call.getDouble(key);
+                  return d == null ? 0L : d.longValue();
+              }
+
+              @PluginMethod
+              public void start(PluginCall call) {
+                  long endTs = readLong(call, "endTs");
+                  if (endTs <= System.currentTimeMillis()) {
+                      call.reject("endTs liegt in der Vergangenheit");
+                      return;
+                  }
+                  if (Build.VERSION.SDK_INT >= 33 && getActivity() != null
+                          && ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                      ActivityCompat.requestPermissions(getActivity(), new String[]{ Manifest.permission.POST_NOTIFICATIONS }, 4712);
+                  }
+                  Intent i = new Intent(getContext(), SleepTimerService.class);
+                  i.setAction(SleepTimerService.ACTION_START);
+                  i.putExtra("mac", call.getString("mac", ""));
+                  i.putExtra("startTs", readLong(call, "startTs"));
+                  i.putExtra("endTs", endTs);
+                  i.putExtra("fade", Boolean.TRUE.equals(call.getBoolean("fade", true)));
+                  i.putExtra("frameHex", call.getString("frameHex", ""));
+                  try {
+                      if (Build.VERSION.SDK_INT >= 26) getContext().startForegroundService(i);
+                      else getContext().startService(i);
+                      call.resolve();
+                  } catch (Exception e) {
+                      call.reject("Timer-Dienst konnte nicht gestartet werden: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void update(PluginCall call) {
+                  SleepTimerService.applyUpdate(
+                      call.hasOption("fade") ? call.getBoolean("fade") : null,
+                      call.getString("frameHex", null)
+                  );
+                  call.resolve();
+              }
+
+              @PluginMethod
+              public void cancel(PluginCall call) {
+                  getContext().stopService(new Intent(getContext(), SleepTimerService.class));
+                  call.resolve();
+              }
+
+              @PluginMethod
+              public void getStatus(PluginCall call) {
+                  JSObject ret = new JSObject();
+                  long end = SleepTimerService.activeEndTs;
+                  ret.put("active", end > System.currentTimeMillis());
+                  ret.put("startTs", SleepTimerService.activeStartTs);
+                  ret.put("endTs", end);
+                  call.resolve(ret);
+              }
+          }''')
+
+          with open(f"{java_dir}/SleepTimerService.java", "w") as f:
+              f.write(r'''package de.jgu.meinzimmer;
+
+          import android.annotation.SuppressLint;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.bluetooth.BluetoothAdapter;
+          import android.bluetooth.BluetoothDevice;
+          import android.bluetooth.BluetoothGatt;
+          import android.bluetooth.BluetoothGattCallback;
+          import android.bluetooth.BluetoothGattCharacteristic;
+          import android.bluetooth.BluetoothGattService;
+          import android.bluetooth.BluetoothManager;
+          import android.bluetooth.BluetoothProfile;
+          import android.bluetooth.BluetoothStatusCodes;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.HandlerThread;
+          import android.os.IBinder;
+          import android.os.PowerManager;
+          import android.os.SystemClock;
+          import java.util.UUID;
+          import java.util.concurrent.CountDownLatch;
+          import java.util.concurrent.TimeUnit;
+
+          /**
+           * Ausschalt-Timer als Vordergrund-Dienst: läuft weiter, wenn die App im Hintergrund
+           * ist oder der Bildschirm aus ist. Fadet die LEDs sanft aus und schaltet sie am Ende
+           * per Bluetooth (eigene GATT-Verbindung) aus.
+           */
+          public class SleepTimerService extends Service {
+              public static final String ACTION_START = "de.jgu.meinzimmer.TIMER_START";
+              public static final String ACTION_STOP  = "de.jgu.meinzimmer.TIMER_STOP";
+
+              private static final String CHANNEL_ID = "lumen_sleep_timer";
+              private static final int NOTIF_ID = 4711;
+              private static final UUID SERVICE_UUID = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb");
+              private static final UUID WRITE_UUID   = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb");
+              private static final int TOTAL_LEDS = 180;
+              private static final int FADE_STEPS = 40;
+
+              public static volatile long activeStartTs = 0;
+              public static volatile long activeEndTs = 0;
+              private static volatile SleepTimerService instance;
+
+              private HandlerThread workerThread;
+              private Handler worker;
+              private PowerManager.WakeLock wakeLock;
+
+              private String mac = "";
+              private long startTs, endTs;
+              private volatile boolean fade = true;
+              private volatile byte[] baseFrame;
+              private int lastStep = -1;
+              private int packetCounter = 0x60;
+
+              private volatile BluetoothGatt gatt;
+              private volatile BluetoothGattCharacteristic writeChar;
+              private volatile CountDownLatch readyLatch;
+              private volatile CountDownLatch writeLatch;
+
+              public static void applyUpdate(Boolean newFade, String frameHex) {
+                  SleepTimerService s = instance;
+                  if (s == null) return;
+                  if (newFade != null) s.fade = newFade;
+                  if (frameHex != null) {
+                      byte[] f = parseFrame(frameHex);
+                      if (f != null) {
+                          s.baseFrame = f;
+                          s.lastStep = -1; // beim nächsten Tick neu senden, falls Fade schon läuft
+                      }
+                  }
+              }
+
+              private static byte[] parseFrame(String hex) {
+                  if (hex == null || hex.length() != TOTAL_LEDS * 6) return null;
+                  byte[] out = new byte[TOTAL_LEDS * 3];
+                  try {
+                      for (int i = 0; i < out.length; i++) {
+                          out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+                      }
+                  } catch (NumberFormatException e) {
+                      return null;
+                  }
+                  return out;
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) { return null; }
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  instance = this;
+                  workerThread = new HandlerThread("LumenSleepTimer");
+                  workerThread.start();
+                  worker = new Handler(workerThread.getLooper());
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Ausschalt-Timer", NotificationManager.IMPORTANCE_LOW);
+                      ch.setDescription("Zeigt den laufenden LED-Ausschalt-Timer an");
+                      NotificationManager nm = getSystemService(NotificationManager.class);
+                      if (nm != null) nm.createNotificationChannel(ch);
+                  }
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+                      stopSelf();
+                      return START_NOT_STICKY;
+                  }
+                  if (intent == null || intent.getLongExtra("endTs", 0) <= System.currentTimeMillis()) {
+                      goForeground(System.currentTimeMillis());
+                      stopSelf();
+                      return START_NOT_STICKY;
+                  }
+
+                  mac = intent.getStringExtra("mac");
+                  endTs = intent.getLongExtra("endTs", 0);
+                  startTs = intent.getLongExtra("startTs", System.currentTimeMillis());
+                  fade = intent.getBooleanExtra("fade", true);
+                  baseFrame = parseFrame(intent.getStringExtra("frameHex"));
+                  lastStep = -1;
+                  activeStartTs = startTs;
+                  activeEndTs = endTs;
+
+                  goForeground(endTs);
+
+                  PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                  if (wakeLock == null && pm != null) {
+                      wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LumenControl:SleepTimer");
+                      wakeLock.setReferenceCounted(false);
+                  }
+                  if (wakeLock != null) wakeLock.acquire(Math.max(60000L, endTs - System.currentTimeMillis() + 5 * 60000L));
+
+                  worker.removeCallbacks(tick);
+                  worker.post(tick);
+                  return START_REDELIVER_INTENT;
+              }
+
+              private void goForeground(long end) {
+                  Intent open = new Intent(this, MainActivity.class);
+                  open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  PendingIntent openPi = PendingIntent.getActivity(this, 201, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  Intent stop = new Intent(this, SleepTimerService.class);
+                  stop.setAction(ACTION_STOP);
+                  PendingIntent stopPi = PendingIntent.getService(this, 202, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
+                  b.setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                   .setContentTitle("LED-Timer läuft")
+                   .setContentText("LEDs werden automatisch ausgeschaltet")
+                   .setContentIntent(openPi)
+                   .setOngoing(true)
+                   .setShowWhen(true)
+                   .setWhen(end)
+                   .setUsesChronometer(true)
+                   .addAction(new Notification.Action.Builder(0, "Stopp", stopPi).build());
+                  if (Build.VERSION.SDK_INT >= 24) b.setChronometerCountDown(true);
+                  Notification n = b.build();
+                  try {
+                      if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+                      else startForeground(NOTIF_ID, n);
+                  } catch (Exception e) {
+                      // z.B. fehlende Bluetooth-Berechtigung: Timer trotzdem so gut wie möglich weiterlaufen lassen
+                  }
+              }
+
+              private final Runnable tick = new Runnable() {
+                  @Override
+                  public void run() {
+                      long now = System.currentTimeMillis();
+                      long remaining = endTs - now;
+                      if (remaining <= 0) {
+                          finishTimer();
+                          return;
+                      }
+                      long total = Math.max(1000L, endTs - startTs);
+                      long fadeWindow = Math.min(10L * 60L * 1000L, (long) (total * 0.5));
+                      long delay;
+                      if (fade && baseFrame != null && remaining <= fadeWindow) {
+                          double p = 1.0 - (double) remaining / (double) fadeWindow;
+                          int step = (int) Math.floor(p * FADE_STEPS);
+                          if (step != lastStep) {
+                              lastStep = step;
+                              sendFadedFrame(p);
+                          }
+                          delay = 1000L;
+                      } else {
+                          // bis kurz vor Fade-Beginn bzw. Ende schlafen (max. 30 s)
+                          long untilFade = remaining - fadeWindow;
+                          delay = Math.max(1000L, Math.min(30000L, (fade && untilFade > 0) ? untilFade : remaining));
+                      }
+                      worker.postDelayed(this, Math.min(delay, Math.max(250L, remaining)));
+                  }
+              };
+
+              private void finishTimer() {
+                  boolean ok = false;
+                  for (int attempt = 0; attempt < 4 && !ok; attempt++) {
+                      if (ensureConnected()) ok = sendPowerOff();
+                      if (!ok) {
+                          closeGatt();
+                          SystemClock.sleep(3000);
+                      }
+                  }
+                  activeEndTs = 0;
+                  activeStartTs = 0;
+                  stopSelf();
+              }
+
+              // ---------- Bluetooth ----------
+              private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+                  @SuppressLint("MissingPermission")
+                  @Override
+                  public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
+                      try {
+                          if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                              if (!g.requestMtu(517)) g.discoverServices();
+                          } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                              writeChar = null;
+                              if (g == gatt) gatt = null;
+                              try { g.close(); } catch (Exception ignored) {}
+                              releaseLatches();
+                          }
+                      } catch (SecurityException e) {
+                          releaseLatches();
+                      }
+                  }
+
+                  @SuppressLint("MissingPermission")
+                  @Override
+                  public void onMtuChanged(BluetoothGatt g, int mtu, int status) {
+                      try { g.discoverServices(); } catch (SecurityException e) { releaseLatches(); }
+                  }
+
+                  @Override
+                  public void onServicesDiscovered(BluetoothGatt g, int status) {
+                      BluetoothGattService s = g.getService(SERVICE_UUID);
+                      if (s != null) writeChar = s.getCharacteristic(WRITE_UUID);
+                      CountDownLatch l = readyLatch;
+                      if (l != null) l.countDown();
+                  }
+
+                  @Override
+                  public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+                      CountDownLatch l = writeLatch;
+                      if (l != null) l.countDown();
+                  }
+              };
+
+              private void releaseLatches() {
+                  CountDownLatch r = readyLatch; if (r != null) r.countDown();
+                  CountDownLatch w = writeLatch; if (w != null) w.countDown();
+              }
+
+              @SuppressLint("MissingPermission")
+              private boolean ensureConnected() {
+                  if (gatt != null && writeChar != null) return true;
+                  closeGatt();
+                  try {
+                      BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+                      BluetoothAdapter ad = bm != null ? bm.getAdapter() : null;
+                      if (ad == null || !ad.isEnabled() || mac == null || !BluetoothAdapter.checkBluetoothAddress(mac)) return false;
+                      BluetoothDevice dev = ad.getRemoteDevice(mac);
+                      readyLatch = new CountDownLatch(1);
+                      gatt = Build.VERSION.SDK_INT >= 23
+                          ? dev.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                          : dev.connectGatt(this, false, gattCallback);
+                      if (gatt == null) return false;
+                      readyLatch.await(20, TimeUnit.SECONDS);
+                  } catch (SecurityException | InterruptedException e) {
+                      return false;
+                  }
+                  if (writeChar == null) {
+                      closeGatt();
+                      return false;
+                  }
+                  return true;
+              }
+
+              @SuppressLint("MissingPermission")
+              private void closeGatt() {
+                  BluetoothGatt g = gatt;
+                  gatt = null;
+                  writeChar = null;
+                  if (g != null) {
+                      try { g.disconnect(); } catch (Exception ignored) {}
+                      try { g.close(); } catch (Exception ignored) {}
+                  }
+              }
+
+              @SuppressLint("MissingPermission")
+              private boolean writePacket(byte[] data) {
+                  for (int attempt = 0; attempt < 3; attempt++) {
+                      BluetoothGatt g = gatt;
+                      BluetoothGattCharacteristic c = writeChar;
+                      if (g == null || c == null) return false;
+                      writeLatch = new CountDownLatch(1);
+                      boolean ok;
+                      try {
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              ok = g.writeCharacteristic(c, data, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) == BluetoothStatusCodes.SUCCESS;
+                          } else {
+                              c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+                              c.setValue(data);
+                              ok = g.writeCharacteristic(c);
+                          }
+                      } catch (SecurityException e) {
+                          return false;
+                      }
+                      if (ok) {
+                          try { writeLatch.await(2, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                          SystemClock.sleep(18);
+                          return true;
+                      }
+                      SystemClock.sleep(60);
+                  }
+                  return false;
+              }
+
+              private void sendFadedFrame(double p) {
+                  byte[] base = baseFrame;
+                  if (base == null) return;
+                  // entspricht compute180Leds() aus der App: Helligkeit (1-p)^1.3 und Farbverschiebung Richtung Rot
+                  double q = Math.max(0.0, 1.0 - p);
+                  double fr = Math.pow(q, 2.1), fg = Math.pow(q, 2.9), fb = Math.pow(q, 4.3);
+                  byte[] rgb = new byte[TOTAL_LEDS * 3];
+                  for (int i = 0; i < TOTAL_LEDS; i++) {
+                      rgb[i * 3]     = (byte) Math.round((base[i * 3] & 0xFF) * fr);
+                      rgb[i * 3 + 1] = (byte) Math.round((base[i * 3 + 1] & 0xFF) * fg);
+                      rgb[i * 3 + 2] = (byte) Math.round((base[i * 3 + 2] & 0xFF) * fb);
+                  }
+                  if (!ensureConnected()) return;
+                  if (!transmitRgb(rgb)) closeGatt();
+              }
+
+              private boolean transmitRgb(byte[] rgb) {
+                  final int lenWord = 549;
+                  final int lenHi = (lenWord >> 8) & 0xFF, lenLo = lenWord & 0xFF;
+                  byte[] full = new byte[3 + rgb.length + 5 + 1];
+                  int k = 0;
+                  full[k++] = 0x59; full[k++] = (byte) lenHi; full[k++] = (byte) lenLo;
+                  System.arraycopy(rgb, 0, full, k, rgb.length); k += rgb.length;
+                  byte[] tail = { 0x00, 0x00, 0x01, 0x64, 0x01 };
+                  System.arraycopy(tail, 0, full, k, tail.length); k += tail.length;
+                  int sum = 0;
+                  for (int i = 0; i < k; i++) sum += full[i] & 0xFF;
+                  full[k] = (byte) (sum & 0xFF);
+
+                  packetCounter = (packetCounter + 1) & 0xFF;
+                  final int chunkSize = 165;
+                  int totalChunks = (full.length + chunkSize - 1) / chunkSize;
+                  for (int f = 0; f < totalChunks; f++) {
+                      int from = f * chunkSize;
+                      int len = Math.min(chunkSize, full.length - from);
+                      boolean isLast = (f == totalChunks - 1);
+                      byte fragFlag = (byte) (isLast ? 0x80 : 0x00);
+                      byte[] packet;
+                      if (f == 0) {
+                          packet = new byte[8 + len];
+                          packet[0] = 0x40; packet[1] = (byte) packetCounter; packet[2] = fragFlag; packet[3] = 0x00;
+                          packet[4] = (byte) lenHi; packet[5] = (byte) lenLo; packet[6] = (byte) (len + 1); packet[7] = 0x0b;
+                          System.arraycopy(full, from, packet, 8, len);
+                      } else {
+                          packet = new byte[5 + len];
+                          packet[0] = 0x40; packet[1] = (byte) packetCounter; packet[2] = fragFlag; packet[3] = (byte) f;
+                          packet[4] = (byte) len;
+                          System.arraycopy(full, from, packet, 5, len);
+                      }
+                      if (!writePacket(packet)) return false;
+                  }
+                  return true;
+              }
+
+              private boolean sendPowerOff() {
+                  packetCounter = (packetCounter + 1) & 0xFF;
+                  byte[] payload = { 0x3b, 0x24, 0, 0, 0, 0, 0, 0, 0, 0x32, 0, 0 };
+                  int sum = 0;
+                  for (byte b : payload) sum += b & 0xFF;
+                  byte[] pkt = new byte[8 + payload.length + 1];
+                  byte[] header = { 0x00, (byte) packetCounter, (byte) 0x80, 0x00, 0x00, 0x0d, 0x0e, 0x0b };
+                  System.arraycopy(header, 0, pkt, 0, header.length);
+                  System.arraycopy(payload, 0, pkt, header.length, payload.length);
+                  pkt[pkt.length - 1] = (byte) (sum & 0xFF);
+                  return writePacket(pkt);
+              }
+
+              @Override
+              public void onDestroy() {
+                  instance = null;
+                  activeEndTs = 0;
+                  activeStartTs = 0;
+                  if (worker != null) {
+                      worker.removeCallbacksAndMessages(null);
+                      worker.post(this::closeGatt);
+                  }
+                  if (workerThread != null) workerThread.quitSafely();
+                  if (wakeLock != null && wakeLock.isHeld()) {
+                      try { wakeLock.release(); } catch (Exception ignored) {}
+                  }
+                  if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
+                  else stopForeground(true);
+                  super.onDestroy();
+              }
+          }''')
+
+
           # 7. AndroidManifest.xml aktualisieren (Berechtigungen, Shortcuts, Widget-Receiver)
           manifest_path = "android/app/src/main/AndroidManifest.xml"
           with open(manifest_path, "r") as f:
@@ -324,6 +816,10 @@ jobs:
               <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
           """
           activity_extras = """
                   <intent-filter>
@@ -342,6 +838,7 @@ jobs:
                       </intent-filter>
                       <meta-data android:name="android.appwidget.provider" android:resource="@xml/led_widget_info" />
                   </receiver>
+                  <service android:name=".SleepTimerService" android:exported="false" android:foregroundServiceType="connectedDevice" />
               </application>"""
 
           xml = xml.replace("<application", perms + "\n    <application", 1)

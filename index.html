@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>LumenControl 7.2</title>
+  <title>LumenControl 7.3</title>
   <style>
     :root {
       --bg: #0b0e14;
@@ -360,7 +360,7 @@
       </div>
       <div class="top-actions">
         <button class="icon-btn" title="Einstellungen" onclick="toggleSettingsPanel()">⚙️</button>
-        <button id="powerToggleBtn" class="icon-btn power-toggle is-on" title="Ein / Aus" onclick="togglePower()" aria-label="Ein / Aus">
+        <button id="powerToggleBtn" class="icon-btn power-toggle is-off" title="Ein / Aus" onclick="togglePower()" aria-label="Ein / Aus">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
             <line x1="12" y1="2" x2="12" y2="12"></line>
@@ -548,12 +548,18 @@
   let isNativeConnected = false;
   let packetCounter = 1;
 
-  let isPowerOn = true;
+  // Beim Start gilt: LEDs = AUS und kein Modus ausgewählt.
+  // Der echte Zustand wird nach dem Verbinden beim Controller abgefragt.
+  let isPowerOn = false;
   let globalBrightness = 85;
 
-  let activeModeType = 'scene';
+  // Zuletzt gesendete Ausgabe (wird nur intern genutzt, z.B. für das sanfte Ausfaden),
+  // aber beim Start NICHT als aktiver Modus angezeigt.
+  let activeModeType = null;
   let activeSceneId = 1;
   let activeSolidHex = '#ffffff';
+  let showActiveSelection = false;
+  let stateQueryUntil = 0;
 
   let widgetFavTarget = 1;
   let autoApplyFavOnStart = false;
@@ -577,6 +583,8 @@
   let keepAliveAudioCtx = null;
   let keepAliveOsc = null;
   let wakeLockSentinel = null;
+  let nativeTimerPlugin = null;
+  let nativeTimerActive = false;
 
   const defaultScenes = [
     {
@@ -633,9 +641,14 @@
     }, false);
 
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && timerEndTimestamp) {
-        updateTimerDisplay();
-      }
+      if (document.hidden) return;
+      if (getNativeTimer()) syncWithNativeTimer();
+      else if (timerEndTimestamp) updateTimerDisplay();
+    });
+
+    document.getElementById('sunsetFadeCheck').addEventListener('change', (e) => {
+      const nt = getNativeTimer();
+      if (nt && nativeTimerActive) nt.update({ fade: e.target.checked }).catch(() => {});
     });
 
     setTimeout(() => {
@@ -790,7 +803,8 @@
     const wFav = localStorage.getItem('zengge_widgetFav');
     const aFav = localStorage.getItem('zengge_autoApplyFav_v2');
     const savedRepo = localStorage.getItem('lumen_gh_repo');
-    const savedPower = localStorage.getItem('lumen_power_state');
+    const savedBright = localStorage.getItem('lumen_brightness');
+    const lastOut = localStorage.getItem('lumen_last_output');
 
     if (gD !== null) greenDampEnd = parseInt(gD, 10);
     if (rD !== null) redDampEnd = parseInt(rD, 10);
@@ -801,8 +815,20 @@
     if (aFav !== null) autoApplyFavOnStart = (aFav === 'true');
     if (savedRepo) document.getElementById('ghRepoInput').value = savedRepo;
 
-    if (savedPower !== null) {
-      setPowerVisualState(savedPower === 'true');
+    // Power-Anzeige startet immer auf AUS (nicht mehr den alten Zustand übernehmen)
+    setPowerVisualState(false, true);
+
+    if (savedBright !== null) {
+      globalBrightness = Math.max(5, Math.min(100, parseInt(savedBright, 10) || 85));
+      document.getElementById('globalBright').value = globalBrightness;
+      document.getElementById('brightVal').textContent = globalBrightness;
+    }
+    if (lastOut) {
+      try {
+        const o = JSON.parse(lastOut);
+        if (o.type === 'solid' && o.hex) { activeModeType = 'solid'; activeSolidHex = o.hex; }
+        else if (o.type === 'scene' && scenes.some(sc => sc.id === o.sceneId)) { activeModeType = 'scene'; activeSceneId = o.sceneId; }
+      } catch (e) {}
     }
 
     loadStorageUI();
@@ -859,9 +885,9 @@
     }
   }
 
-  function setPowerVisualState(on) {
+  function setPowerVisualState(on, fromDevice = false) {
     isPowerOn = on;
-    localStorage.setItem('lumen_power_state', on ? 'true' : 'false');
+    if (!fromDevice) stateQueryUntil = 0; // Nutzer-Aktion hat Vorrang vor später Antwort
     const btn = document.getElementById('powerToggleBtn');
     btn.classList.toggle('is-on', on);
     btn.classList.toggle('is-off', !on);
@@ -883,6 +909,7 @@
 
   function selectSolidColor(hex, btnId) {
     activeModeType = 'solid';
+    showActiveSelection = true;
     activeSolidHex = hex;
     clearSelectionHighlights();
     if (btnId) {
@@ -901,8 +928,24 @@
   }
 
   // ================= AUSSCHALT-TIMER =================
+  // In der APK läuft der Timer in einem nativen Android-Dienst (SleepTimerService),
+  // der auch bei geschlossener App / ausgeschaltetem Bildschirm ausfadet und abschaltet.
+  // Im Browser bleibt die alte JavaScript-Variante als Fallback.
+  function getNativeTimer() {
+    try {
+      const C = window.Capacitor;
+      if (!C || !C.isPluginAvailable || !C.isPluginAvailable('SleepTimer')) return null;
+      if (!nativeTimerPlugin) {
+        nativeTimerPlugin = C.registerPlugin ? C.registerPlugin('SleepTimer') : (C.Plugins && C.Plugins.SleepTimer);
+      }
+      return nativeTimerPlugin || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function startTimer(minutes) {
-    cancelTimer(false);
+    cancelTimer(false, false); // ein neuer Start überschreibt einen laufenden nativen Timer
     const now = Date.now();
     timerStartTimestamp = now;
     timerEndTimestamp = now + minutes * 60 * 1000;
@@ -911,7 +954,23 @@
     localStorage.setItem('lumen_timer_start', String(timerStartTimestamp));
     localStorage.setItem('lumen_timer_end', String(timerEndTimestamp));
 
-    enableBackgroundKeepAlive();
+    const nt = getNativeTimer();
+    if (nt) {
+      nativeTimerActive = true;
+      nt.start({
+        mac: TARGET_MAC,
+        startTs: timerStartTimestamp,
+        endTs: timerEndTimestamp,
+        fade: document.getElementById('sunsetFadeCheck').checked,
+        frameHex: getCurrentFrameHex()
+      }).catch(() => {
+        // Nativer Dienst nicht startbar -> alte JS-Variante verwenden
+        nativeTimerActive = false;
+        enableBackgroundKeepAlive();
+      });
+    } else {
+      enableBackgroundKeepAlive();
+    }
 
     document.querySelectorAll('.t-pill').forEach(p => p.classList.remove('active'));
     const pill = document.getElementById('tp_' + minutes);
@@ -922,7 +981,52 @@
     timerInterval = setInterval(updateTimerDisplay, 1000);
   }
 
+  function showRunningTimer(startTs, endTs) {
+    timerStartTimestamp = startTs;
+    timerEndTimestamp = endTs;
+    localStorage.setItem('lumen_timer_start', String(startTs));
+    localStorage.setItem('lumen_timer_end', String(endTs));
+    document.getElementById('tp_cancel').classList.remove('hidden');
+    if (timerInterval) clearInterval(timerInterval);
+    updateTimerDisplay();
+    timerInterval = setInterval(updateTimerDisplay, 1000);
+  }
+
+  // Gleicht die Anzeige mit dem nativen Timer-Dienst ab (z.B. nach App-Neustart
+  // oder wenn der Timer über die Benachrichtigung gestoppt wurde).
+  function syncWithNativeTimer() {
+    const nt = getNativeTimer();
+    if (!nt) return;
+    nt.getStatus().then((st) => {
+      if (st && st.active && st.endTs > Date.now()) {
+        nativeTimerActive = true;
+        showRunningTimer(st.startTs || Date.now(), st.endTs);
+      } else if (timerEndTimestamp) {
+        const expired = timerEndTimestamp <= Date.now();
+        nativeTimerActive = false;
+        cancelTimer(true, false);
+        if (expired) {
+          setPowerVisualState(false);
+          document.getElementById('timerLabel').textContent = "✅ Timer abgelaufen (LEDs aus)";
+        }
+      }
+    }).catch(() => {});
+  }
+
   function resumeSavedTimerIfActive() {
+    if (getNativeTimer()) {
+      const savedEnd = localStorage.getItem('lumen_timer_end');
+      if (savedEnd) {
+        const endTs = parseInt(savedEnd, 10);
+        const startTs = parseInt(localStorage.getItem('lumen_timer_start') || String(Date.now()), 10);
+        if (endTs > Date.now()) {
+          nativeTimerActive = true;
+          showRunningTimer(startTs, endTs);
+        }
+      }
+      syncWithNativeTimer();
+      return;
+    }
     const savedEnd = localStorage.getItem('lumen_timer_end');
     const savedStart = localStorage.getItem('lumen_timer_start');
     if (!savedEnd) return;
@@ -948,7 +1052,12 @@
     if (mins > 0 && mins <= 1440) startTimer(mins);
   }
 
-  function cancelTimer(resetText = true) {
+  function cancelTimer(resetText = true, stopNative = true) {
+    if (stopNative) {
+      const nt = getNativeTimer();
+      if (nt) nt.cancel().catch(() => {});
+    }
+    nativeTimerActive = false;
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = null;
     timerStartTimestamp = null;
@@ -972,9 +1081,10 @@
     const diffMs = timerEndTimestamp - now;
 
     if (diffMs <= 0) {
+      const handledNatively = nativeTimerActive;
       setPowerVisualState(false);
-      sendPower(false);
-      cancelTimer(false);
+      if (!handledNatively) sendPower(false);
+      cancelTimer(false, false);
       document.getElementById('timerLabel').textContent = "✅ Timer abgelaufen (LEDs aus)";
       document.getElementById('timerCountdown').textContent = "";
       return;
@@ -995,7 +1105,7 @@
       const sunsetProgress = 1 - (diffMs / fadeWindow);
       document.getElementById('timerLabel').textContent = "🌅 Sonnenuntergang läuft:";
       const step = Math.floor(sunsetProgress * 40);
-      if (step !== lastSunsetStep) {
+      if (!nativeTimerActive && step !== lastSunsetStep) {
         lastSunsetStep = step;
         sendCurrentActiveOutput(sunsetProgress);
       }
@@ -1035,8 +1145,51 @@
     );
   }
 
+  // ================= ECHTEN LED-ZUSTAND ABFRAGEN =================
+  function hexToBytes(hex) {
+    const out = [];
+    for (let i = 0; i + 1 < hex.length; i += 2) out.push(parseInt(hex.substr(i, 2), 16));
+    return out;
+  }
+
+  function handleStateNotification(bytes) {
+    if (Date.now() > stateQueryUntil) return;
+    let payload = null;
+    try {
+      const txt = String.fromCharCode.apply(null, Array.from(bytes));
+      const m = txt.match(/"payload"\s*:\s*"([0-9a-fA-F]+)"/);
+      if (m) payload = hexToBytes(m[1]);
+    } catch (e) {}
+    if (!payload) payload = Array.from(bytes);
+    for (let i = 0; i + 2 < payload.length; i++) {
+      if (payload[i] === 0x81 && (payload[i + 2] === 0x23 || payload[i + 2] === 0x24)) {
+        stateQueryUntil = 0;
+        setPowerVisualState(payload[i + 2] === 0x23, true);
+        return;
+      }
+    }
+  }
+
+  async function queryLedState() {
+    stateQueryUntil = Date.now() + 6000;
+    packetCounter = (packetCounter + 1) & 0xFF;
+    await writeRawBytes(new Uint8Array([0x00, packetCounter, 0x80, 0x00, 0x00, 0x04, 0x05, 0x0a, 0x81, 0x8a, 0x8b, 0x96]));
+  }
+
+  function startNativeStateNotifications() {
+    try {
+      window.ble.startNotification(
+        TARGET_MAC, "ffff", "ff02",
+        (buf) => handleStateNotification(new Uint8Array(buf)),
+        () => {}
+      );
+    } catch (e) {}
+    setTimeout(() => queryLedState(), 350);
+  }
+
   function onNativeConnected() {
     isNativeConnected = true;
+    if (!didInitialAutoSend) startNativeStateNotifications();
     document.getElementById('statusText').textContent = "✅ Direkt verbunden";
     const btn = document.getElementById('connBtn');
     btn.textContent = "Verbunden";
@@ -1080,6 +1233,15 @@
       const server = await device.gatt.connect();
       const service = await server.getPrimaryService(SERVICE_UUID);
       writeChar = await service.getCharacteristic(WRITE_UUID);
+      try {
+        const notifyChar = await service.getCharacteristic(0xff02);
+        await notifyChar.startNotifications();
+        notifyChar.addEventListener('characteristicvaluechanged', (e) => {
+          const v = e.target.value;
+          handleStateNotification(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+        });
+        setTimeout(() => queryLedState(), 300);
+      } catch (e) {}
 
       document.getElementById('statusText').textContent = "✅ " + (device.name || "Verbunden");
       const btn = document.getElementById('connBtn');
@@ -1098,7 +1260,7 @@
     const btn = document.getElementById('connBtn');
     btn.textContent = "🔗 Verbinden";
     btn.classList.remove('connected');
-    if (timerEndTimestamp && window.ble) {
+    if (timerEndTimestamp && window.ble && !nativeTimerActive) {
       setTimeout(() => connectNativeAPK(), 2500);
     }
   }
@@ -1128,7 +1290,7 @@
     scenes.forEach(sc => {
       const isWidgetFav = (widgetFavTarget === sc.id);
       const card = document.createElement('div');
-      card.className = 'scene-card' + (activeModeType === 'scene' && sc.id === activeSceneId ? ' active' : '');
+      card.className = 'scene-card' + (showActiveSelection && activeModeType === 'scene' && sc.id === activeSceneId ? ' active' : '');
       card.onclick = () => activateScene(sc.id);
 
       const header = document.createElement('div');
@@ -1169,6 +1331,7 @@
   function activateScene(id) {
     activeModeType = 'scene';
     activeSceneId = id;
+    showActiveSelection = true;
     clearSelectionHighlights();
     renderSceneList();
     setPowerVisualState(true);
@@ -1214,6 +1377,7 @@
     if (idx !== -1) scenes[idx] = editingScene;
     activeModeType = 'scene';
     activeSceneId = editingScene.id;
+    showActiveSelection = true;
     saveStorage();
     closeEditor();
   }
@@ -1361,6 +1525,7 @@
   function onBrightnessChange(val) {
     globalBrightness = parseInt(val, 10);
     document.getElementById('brightVal').textContent = globalBrightness;
+    localStorage.setItem('lumen_brightness', String(globalBrightness));
     if (sendDebounce) clearTimeout(sendDebounce);
     sendDebounce = setTimeout(() => {
       if (editingScene) triggerEditorLiveSend();
@@ -1368,16 +1533,36 @@
     }, 130);
   }
 
-  function sendCurrentActiveOutput(sunsetProgress) {
+  function getCurrentOutputScene() {
     if (activeModeType === 'solid') {
-      const virtualSolid = {
+      return {
         mode: 'gradient',
         stops: [{ pos: 0, color: activeSolidHex }, { pos: 180, color: activeSolidHex }]
       };
-      sendSceneBytes(virtualSolid, sunsetProgress);
-    } else {
-      const sc = scenes.find(s => s.id === activeSceneId) || scenes[0];
-      if (sc) sendSceneBytes(sc, sunsetProgress);
+    }
+    if (activeModeType === 'scene') {
+      return scenes.find(s => s.id === activeSceneId) || scenes[0] || null;
+    }
+    return null;
+  }
+
+  // 180 LEDs als Hex-String (540 Bytes RGB) – Grundlage für das native Ausfaden
+  function getCurrentFrameHex() {
+    const sc = getCurrentOutputScene();
+    if (!sc) return '';
+    return compute180Leds(sc, 0).map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+  }
+
+  function sendCurrentActiveOutput(sunsetProgress) {
+    const sc = getCurrentOutputScene();
+    if (!sc) return;
+    sendSceneBytes(sc, sunsetProgress);
+    if (!sunsetProgress) {
+      localStorage.setItem('lumen_last_output', JSON.stringify(
+        activeModeType === 'solid' ? { type: 'solid', hex: activeSolidHex } : { type: 'scene', sceneId: activeSceneId }
+      ));
+      const nt = getNativeTimer();
+      if (nt && nativeTimerActive) nt.update({ frameHex: getCurrentFrameHex() }).catch(() => {});
     }
   }
 
